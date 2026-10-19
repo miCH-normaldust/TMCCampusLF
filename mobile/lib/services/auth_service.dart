@@ -32,12 +32,12 @@ class AuthService {
     };
   }
 
-  Future<void> register({
+  Future<String> register({
     required Map<String, dynamic> details,
     required String captchaToken,
     required String captchaAnswer,
   }) async {
-    await _api.dio.post<void>(
+    final response = await _api.dio.post<Map<String, dynamic>>(
       '/register',
       data: {
         ...details,
@@ -46,6 +46,8 @@ class AuthService {
         'captcha_answer': captchaAnswer,
       },
     );
+    return response.data?['message'] as String? ??
+        'A verification code was sent to your TMC email.';
   }
 
   Future<String> verifyOtp(String email, String code) async {
@@ -54,6 +56,15 @@ class AuthService {
       data: {'email': email.trim(), 'code': code},
     );
     return response.data?['message'] as String? ?? 'Email verified.';
+  }
+
+  Future<String> resendOtp(String email) async {
+    final response = await _api.dio.post<Map<String, dynamic>>(
+      '/resend-otp',
+      data: {'email': email.trim()},
+    );
+    return response.data?['message'] as String? ??
+        'A verification code was sent to your TMC email.';
   }
 
   Future<void> logout() async {

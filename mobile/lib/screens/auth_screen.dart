@@ -26,6 +26,7 @@ class _AuthScreenState extends State<AuthScreen> {
   final _formKey = GlobalKey<FormState>();
   bool _busy = false;
   bool _showPassword = false;
+  bool _showVerifyAction = false;
   String? _message;
   String? _error;
 
@@ -40,6 +41,7 @@ class _AuthScreenState extends State<AuthScreen> {
     if (!_formKey.currentState!.validate() || _busy) return;
     setState(() {
       _busy = true;
+      _showVerifyAction = false;
       _error = null;
       _message = null;
     });
@@ -47,7 +49,14 @@ class _AuthScreenState extends State<AuthScreen> {
       final name = await widget.auth.login(_email.text, _password.text);
       if (mounted) widget.onSignedIn(name);
     } on DioException catch (error) {
-      if (mounted) setState(() => _error = widget.api.errorMessage(error));
+      if (mounted) {
+        final message = widget.api.errorMessage(error);
+        setState(() {
+          _error = message;
+          _showVerifyAction = error.response?.statusCode == 403 &&
+              message == 'Verify your TMC email before signing in.';
+        });
+      }
     } catch (error) {
       if (mounted) setState(() => _error = error.toString());
     } finally {
@@ -90,6 +99,31 @@ class _AuthScreenState extends State<AuthScreen> {
                     const SizedBox(height: 28),
                     if (_message != null) _Notice(text: _message!, success: true),
                     if (_error != null) _Notice(text: _error!, success: false),
+                    if (_showVerifyAction)
+                      TextButton(
+                        onPressed: _busy
+                            ? null
+                            : () async {
+                                final result = await Navigator.of(context)
+                                    .push<_RegistrationResult>(
+                                  MaterialPageRoute(
+                                    builder: (_) => RegistrationScreen(
+                                      api: widget.api,
+                                      auth: widget.auth,
+                                      initialEmail: _email.text.trim(),
+                                    ),
+                                  ),
+                                );
+                                if (!mounted || result == null) return;
+                                setState(() {
+                                  _email.text = result.email;
+                                  _error = null;
+                                  _showVerifyAction = false;
+                                  _message = result.message;
+                                });
+                              },
+                        child: const Text('Verify email or resend code'),
+                      ),
                     TextFormField(
                       controller: _email,
                       keyboardType: TextInputType.emailAddress,
@@ -148,10 +182,16 @@ class _AuthScreenState extends State<AuthScreen> {
 }
 
 class RegistrationScreen extends StatefulWidget {
-  const RegistrationScreen({required this.api, required this.auth, super.key});
+  const RegistrationScreen({
+    required this.api,
+    required this.auth,
+    this.initialEmail,
+    super.key,
+  });
 
   final ApiClient api;
   final AuthService auth;
+  final String? initialEmail;
 
   @override
   State<RegistrationScreen> createState() => _RegistrationScreenState();
@@ -176,12 +216,18 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
   bool _busy = false;
   bool _captchaLoading = false;
   bool _otpSent = false;
+  String? _message;
   String? _error;
 
   @override
   void initState() {
     super.initState();
-    _loadCaptcha();
+    if (widget.initialEmail != null) {
+      _email.text = widget.initialEmail!;
+      _otpSent = true;
+    } else {
+      _loadCaptcha();
+    }
   }
 
   @override
@@ -236,10 +282,11 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
     setState(() {
       _busy = true;
       _error = null;
+      _message = null;
     });
     try {
       if (!_otpSent) {
-        await widget.auth.register(
+        final message = await widget.auth.register(
           details: {
             'first_name': _firstName.text.trim(),
             'last_name': _lastName.text.trim(),
@@ -254,7 +301,10 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
           captchaToken: _captchaToken,
           captchaAnswer: _captchaAnswer.text.trim(),
         );
-        setState(() => _otpSent = true);
+        setState(() {
+          _otpSent = true;
+          _message = message;
+        });
       } else {
         final message = await widget.auth.verifyOtp(_email.text, _otp.text.trim());
         if (mounted) Navigator.of(context).pop(_RegistrationResult(_email.text.trim(), message));
@@ -289,14 +339,30 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
                   maxLength: 6,
                   decoration: const InputDecoration(labelText: 'Verification code'),
                 ),
+                if (_message != null) _Notice(text: _message!, success: true),
                 TextButton(
-                  onPressed: _busy ? null : () async {
-                    try {
-                      await widget.api.dio.post<void>('/resend-otp', data: {'email': _email.text.trim()});
-                    } on DioException catch (error) {
-                      if (mounted) setState(() => _error = widget.api.errorMessage(error));
-                    }
-                  },
+                  onPressed: _busy
+                      ? null
+                      : () async {
+                          setState(() {
+                            _busy = true;
+                            _error = null;
+                            _message = null;
+                          });
+                          try {
+                            final message =
+                                await widget.auth.resendOtp(_email.text);
+                            if (mounted) {
+                              setState(() => _message = message);
+                            }
+                          } on DioException catch (error) {
+                            if (mounted) {
+                              setState(() => _error = widget.api.errorMessage(error));
+                            }
+                          } finally {
+                            if (mounted) setState(() => _busy = false);
+                          }
+                        },
                   child: const Text('Resend code'),
                 ),
               ] else ...[

@@ -2,6 +2,7 @@
 
 namespace Tests\Feature;
 
+use App\Mail\RegistrationVerificationCode;
 use App\Models\Category;
 use App\Models\Location;
 use App\Models\OtpCode;
@@ -116,6 +117,60 @@ class AuthenticationAndPrivacyTest extends TestCase
         $this->assertDatabaseMissing('captcha_challenges', [
             'token_hash' => hash('sha256', $challenge['token']),
         ]);
+    }
+
+    public function test_registered_user_can_receive_verify_code_and_sign_in(): void
+    {
+        $this->withoutMiddleware(ThrottleRequests::class);
+        Mail::fake();
+        DB::table('tmc_masterlist')->insert([
+            'tmc_id_no' => 'TMC-VERIFY-1',
+            'full_name' => 'Verified Member',
+            'email' => 'verified-member@gmail.com',
+            'user_type' => 'student',
+            'department' => 'CCS',
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+
+        $challenge = $this->getJson('/api/v1/captcha')->assertOk()->json();
+        preg_match('/(\d+) \+ (\d+)/', $challenge['question'], $numbers);
+        $this->postJson('/api/v1/register', [
+            'first_name' => 'Verified',
+            'last_name' => 'Member',
+            'tmc_id_no' => 'TMC-VERIFY-1',
+            'email' => 'verified-member@gmail.com',
+            'user_type' => 'student',
+            'department' => 'CCS',
+            'password' => 'LongTestPassword!123',
+            'password_confirmation' => 'LongTestPassword!123',
+            'terms_accepted' => true,
+            'captcha_token' => $challenge['token'],
+            'captcha_answer' => (string) ((int) $numbers[1] + (int) $numbers[2]),
+        ])->assertCreated();
+
+        Mail::assertSent(RegistrationVerificationCode::class, fn (RegistrationVerificationCode $mail): bool => $mail->hasTo('verified-member@gmail.com'));
+        $this->postJson('/api/v1/login', [
+            'email' => 'verified-member@gmail.com',
+            'password' => 'LongTestPassword!123',
+        ])->assertForbidden()->assertJsonPath('message', 'Verify your TMC email before signing in.');
+
+        $this->postJson('/api/v1/resend-otp', [
+            'email' => 'verified-member@gmail.com',
+        ])->assertOk();
+        Mail::assertSentTimes(RegistrationVerificationCode::class, 2);
+        $verificationEmail = Mail::sent(RegistrationVerificationCode::class)->last();
+        $this->assertInstanceOf(RegistrationVerificationCode::class, $verificationEmail);
+
+        $this->postJson('/api/v1/verify-otp', [
+            'email' => 'verified-member@gmail.com',
+            'code' => $verificationEmail->code,
+        ])->assertOk()->assertJsonPath('status', 'active');
+
+        $this->postJson('/api/v1/login', [
+            'email' => 'verified-member@gmail.com',
+            'password' => 'LongTestPassword!123',
+        ])->assertOk()->assertJsonStructure(['token', 'user' => ['email']]);
     }
 
     public function test_incorrect_security_answer_consumes_the_challenge_and_prompts_refresh(): void

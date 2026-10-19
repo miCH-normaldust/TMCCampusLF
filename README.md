@@ -56,7 +56,7 @@ The project includes `.vscode/settings.json` to add the XAMPP PHP directory to n
    npm run dev
    ```
 
-   Or build static assets with `npm run build`; that lets the Blade pages work without the Vite development server. Open `http://127.0.0.1:8000/admin/login`. Local OTP email is written to Laravel's log (`web/storage/logs/laravel.log`) while `MAIL_MAILER=log`.
+   Or build static assets with `npm run build`; that lets the Blade pages work without the Vite development server. Open `http://127.0.0.1:8000/admin/login`. With the default `MAIL_MAILER=log`, registration codes are written to `web/storage/logs/laravel.log`; the mobile app displays this local-mode instruction after registration. To deliver codes to Gmail inboxes, set `MAIL_MAILER=smtp`, `MAIL_HOST=smtp.gmail.com`, `MAIL_PORT=587`, `MAIL_SCHEME=tls`, and `MAIL_USERNAME`, `MAIL_PASSWORD`, and `MAIL_FROM_ADDRESS` to a sender Gmail address and its Google App Password in `web/.env`. Never use a normal Gmail password or commit the app password. Clear cached configuration after changing mail settings with `php artisan config:clear`.
 
    For asynchronous matching and scheduled archiving, run these in additional terminals from `web/`:
 

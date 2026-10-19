@@ -9,6 +9,7 @@ use App\Http\Requests\RegisterRequest;
 use App\Http\Requests\ResendOtpRequest;
 use App\Http\Requests\UpdateProfileRequest;
 use App\Http\Requests\VerifyOtpRequest;
+use App\Mail\RegistrationVerificationCode;
 use App\Models\ActivityLog;
 use App\Models\OtpCode;
 use App\Models\User;
@@ -47,18 +48,22 @@ class AuthController extends Controller
             ->whereRaw('LOWER(email) = ?', [strtolower($request->string('email')->toString())])
             ->exists();
 
-        $user = User::create([
-            ...$request->safe()->except(['terms_accepted', 'captcha_answer', 'captcha_token']),
-            'email' => strtolower($request->string('email')->toString()),
-            'role' => 'user',
-            'status' => $matched ? 'active' : 'pending',
-            'terms_accepted_at' => now(),
-        ]);
+        $user = DB::transaction(function () use ($request, $matched): User {
+            $user = User::create([
+                ...$request->safe()->except(['terms_accepted', 'captcha_answer', 'captcha_token']),
+                'email' => strtolower($request->string('email')->toString()),
+                'role' => 'user',
+                'status' => $matched ? 'active' : 'pending',
+                'terms_accepted_at' => now(),
+            ]);
 
-        $this->sendRegistrationCode($user);
+            $this->sendRegistrationCode($user);
+
+            return $user;
+        });
 
         return response()->json([
-            'message' => 'A verification code was sent to your TMC email.',
+            'message' => $this->registrationCodeMessage(),
             'email' => $user->email,
             'status' => $user->status,
         ], 201);
@@ -102,9 +107,9 @@ class AuthController extends Controller
             return response()->json(['message' => 'This email address is already verified.'], 422);
         }
 
-        $this->sendRegistrationCode($user);
+        DB::transaction(fn () => $this->sendRegistrationCode($user));
 
-        return response()->json(['message' => 'A new verification code was sent.']);
+        return response()->json(['message' => $this->registrationCodeMessage()]);
     }
 
     public function login(LoginRequest $request): JsonResponse
@@ -211,8 +216,13 @@ class AuthController extends Controller
             'expires_at' => now()->addMinutes(10),
         ]);
 
-        Mail::raw("Your TMC CampusLF verification code is {$code}. It expires in 10 minutes.", function ($message) use ($user): void {
-            $message->to($user->email)->subject('TMC CampusLF email verification');
-        });
+        Mail::to($user->email)->send(new RegistrationVerificationCode($code));
+    }
+
+    private function registrationCodeMessage(): string
+    {
+        return config('mail.default') === 'log'
+            ? 'Local mail mode is enabled. Find the verification code in web/storage/logs/laravel.log.'
+            : 'A verification code was sent to your TMC email.';
     }
 }
