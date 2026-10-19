@@ -1,0 +1,98 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "CampusLF: Start Laravel API",
+      "type": "shell",
+      "command": "powershell.exe",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "${workspaceFolder}\\scripts\\start-backend.ps1"
+      ],
+      "isBackground": true,
+      "problemMatcher": {
+        "owner": "campuslf-server",
+        "pattern": {
+          "regexp": "^$"
+        },
+        "background": {
+          "activeOnStart": true,
+          "beginsPattern": "Starting Laravel development server",
+          "endsPattern": "Server running on"
+        }
+      }
+    },
+    {
+      "label": "CampusLF: Start Vite assets",
+      "type": "shell",
+      "command": "npm",
+      "args": [
+        "run",
+        "dev"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}\\web"
+      },
+      "isBackground": true,
+      "problemMatcher": {
+        "owner": "campuslf-vite",
+        "pattern": {
+          "regexp": "^$"
+        },
+        "background": {
+          "activeOnStart": true,
+          "beginsPattern": "VITE v.*ready",
+          "endsPattern": "APP_URL:"
+        }
+      }
+    },
+    {
+      "label": "CampusLF: Prepare Android API bridge",
+      "type": "shell",
+      "command": "powershell.exe",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-Command",
+        "& \"$env:LOCALAPPDATA\\Android\\Sdk\\platform-tools\\adb.exe\" reverse tcp:8000 tcp:8000"
+      ],
+      "dependsOn": [
+        "CampusLF: Start Laravel API"
+      ],
+      "dependsOrder": "sequence",
+      "problemMatcher": []
+    },
+    {
+      "label": "CampusLF: Run Flutter on Android",
+      "type": "shell",
+      "command": "powershell.exe",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "${workspaceFolder}\\scripts\\run-flutter-android.ps1"
+      ],
+      "dependsOn": [
+        "CampusLF: Start Laravel API"
+      ],
+      "dependsOrder": "sequence",
+      "isBackground": true,
+      "problemMatcher": {
+        "owner": "campuslf-flutter",
+        "pattern": {
+          "regexp": "^$"
+        },
+        "background": {
+          "activeOnStart": true,
+          "beginsPattern": "Launching lib\\\\main.dart",
+          "endsPattern": "Flutter run key commands"
+        }
+      }
+    }
+  ]
+}

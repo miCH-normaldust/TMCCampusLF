@@ -1,0 +1,17 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "CampusLF Android (debug)",
+      "request": "launch",
+      "type": "dart",
+      "program": "${workspaceFolder}/mobile/lib/main.dart",
+      "cwd": "${workspaceFolder}/mobile",
+      "preLaunchTask": "CampusLF: Prepare Android API bridge",
+      "args": [
+        "--debug",
+        "--dart-define=CAMPUSLF_API_URL=http://127.0.0.1:8000/api/v1"
+      ]
+    }
+  ]
+}
