@@ -8,7 +8,10 @@ use App\Http\Controllers\Api\DeviceTokenController;
 use App\Http\Controllers\Api\FeedbackController;
 use App\Http\Controllers\Api\InteractionController;
 use App\Http\Controllers\Api\NotificationController;
+use App\Http\Controllers\Api\PeopleController;
 use App\Http\Controllers\Api\PostController;
+use App\Http\Controllers\Api\PostRetrievalRequestController;
+use App\Http\Controllers\Api\PublicMediaController;
 use Illuminate\Support\Facades\Route;
 
 Route::prefix('v1')->group(function (): void {
@@ -16,18 +19,28 @@ Route::prefix('v1')->group(function (): void {
     Route::post('/register', [AuthController::class, 'register'])->middleware('throttle:5,1');
     Route::post('/verify-otp', [AuthController::class, 'verifyOtp'])->middleware('throttle:5,1');
     Route::post('/resend-otp', [AuthController::class, 'resendOtp'])->middleware('throttle:3,1');
+    Route::post('/forgot-password', [AuthController::class, 'requestPasswordReset'])->middleware('throttle:3,1');
+    Route::post('/forgot-password/verify-otp', [AuthController::class, 'verifyPasswordResetOtp'])->middleware('throttle:5,1');
+    Route::post('/forgot-password/reset', [AuthController::class, 'resetPassword'])->middleware('throttle:5,1');
     Route::post('/login', [AuthController::class, 'login'])->middleware('throttle:5,1');
     Route::get('/catalog', [CatalogController::class, 'index']);
+    Route::get('/media', [PublicMediaController::class, 'show']);
     Route::post('/posts/similar', [PostController::class, 'similar'])->middleware('throttle:15,1');
-    Route::get('/posts', [PostController::class, 'index']);
     Route::get('/posts/{post}', [PostController::class, 'show']);
     Route::get('/posts/{post}/comments', [InteractionController::class, 'comments']);
 
     Route::middleware(['auth:sanctum', 'role:user'])->group(function (): void {
+        Route::get('/posts', [PostController::class, 'index']);
         Route::post('/logout', [AuthController::class, 'logout']);
         Route::get('/profile', [AuthController::class, 'profile']);
         Route::get('/me', [AuthController::class, 'profile']);
+        Route::get('/people', [PeopleController::class, 'index']);
+        Route::get('/people/{user}', [PeopleController::class, 'show']);
+        Route::get('/people/{user}/posts', [PeopleController::class, 'posts']);
         Route::put('/profile', [AuthController::class, 'updateProfile']);
+        Route::post('/profile', [AuthController::class, 'updateProfile']);
+        Route::get('/my-posts', [PostController::class, 'mine']);
+        Route::get('/my-posts/{post}/edit-data', [PostController::class, 'editData']);
         Route::put('/password', [AuthController::class, 'changePassword']);
         Route::post('/device-token', [DeviceTokenController::class, 'store']);
         Route::delete('/device-token', [DeviceTokenController::class, 'destroy']);
@@ -36,8 +49,11 @@ Route::prefix('v1')->group(function (): void {
         Route::put('/posts/{post}', [PostController::class, 'update']);
         Route::patch('/posts/{post}/keep-active', [PostController::class, 'keepActive']);
         Route::delete('/posts/{post}', [PostController::class, 'destroy']);
+        Route::post('/posts/{post}/retrieval-request', [PostRetrievalRequestController::class, 'store']);
         Route::get('/posts/{post}/matches', [PostController::class, 'matches']);
         Route::post('/posts/{post}/claims', [ClaimController::class, 'store'])->middleware('throttle:5,1');
+        Route::get('/claims/awaiting-post-author', [ClaimController::class, 'awaitingPostAuthor']);
+        Route::patch('/claims/{claim}/post-author-decision', [ClaimController::class, 'decideForPostAuthor']);
         Route::post('/posts/{post}/comments', [InteractionController::class, 'comment']);
         Route::delete('/comments/{comment}', [InteractionController::class, 'deleteComment']);
         Route::post('/posts/{post}/reactions', [InteractionController::class, 'react']);
@@ -47,11 +63,9 @@ Route::prefix('v1')->group(function (): void {
         Route::patch('/sightings/{sighting}', [InteractionController::class, 'decideSighting']);
         Route::get('/notifications', [NotificationController::class, 'index']);
         Route::patch('/notifications/{notification}/read', [NotificationController::class, 'markRead']);
-        Route::get('/meetup-locations', [ConversationController::class, 'locations']);
         Route::get('/conversations', [ConversationController::class, 'index']);
         Route::get('/conversations/{conversation}/messages', [ConversationController::class, 'messages']);
         Route::post('/conversations/{conversation}/messages', [ConversationController::class, 'send'])->middleware('throttle:30,1');
-        Route::patch('/conversations/{conversation}/location', [ConversationController::class, 'chooseLocation']);
         Route::post('/conversations/{conversation}/handover', [ConversationController::class, 'createHandover']);
         Route::post('/handovers/{handover}/confirm', [ConversationController::class, 'confirmHandover']);
         Route::get('/handovers', [ConversationController::class, 'handovers']);

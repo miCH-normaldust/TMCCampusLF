@@ -4,6 +4,11 @@
 
 @section('content')
     <div class="page-heading"><div><p class="eyebrow">REVIEW QUEUE</p><h1>Found Item Claims</h1><p class="muted">Review a claimant’s private answers against the item’s verification questions.</p></div></div>
+    @include('admin.partials.retrieval-requests', [
+        'retrievalRequests' => $retrievalRequests,
+        'heading' => 'Found-item mark-as-retrieved requests',
+        'description' => 'Review requests from owners of found-item posts.',
+    ])
     <section class="card">
         <form class="filter-form compact-filter" method="get" action="{{ route('admin.claims.index') }}">
             <label>Status<select name="status"><option value="">All claims</option>@foreach (['pending', 'approved', 'rejected'] as $status)<option value="{{ $status }}" @selected(request('status') === $status)>{{ ucfirst($status) }}</option>@endforeach</select></label>

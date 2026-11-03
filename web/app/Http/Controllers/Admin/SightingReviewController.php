@@ -3,7 +3,9 @@
 namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
+use App\Models\Handover;
 use App\Models\LostSighting;
+use App\Models\PostRetrievalRequest;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -24,6 +26,14 @@ class SightingReviewController extends Controller
                 ->where('admin_decision', 'pending')
                 ->latest()
                 ->paginate(15),
+            'retrievalRequests' => PostRetrievalRequest::with([
+                'post:id,item_name,type,status,user_id',
+                'user:id,first_name,last_name,email',
+            ])
+                ->where('status', 'pending')
+                ->whereHas('post', fn ($query) => $query->where('type', 'lost'))
+                ->latest()
+                ->get(),
         ]);
     }
 
@@ -48,8 +58,11 @@ class SightingReviewController extends Controller
                 'admin_reason' => $data['reason'],
             ]);
             $sighting->post->update([
-                'status' => $approved ? 'approved_for_meetup' : 'active',
+                'status' => $approved ? 'handover_pending' : 'active',
             ]);
+            if ($approved) {
+                Handover::firstOrCreate(['sighting_id' => $sighting->id]);
+            }
             foreach ([$sighting->post->author, $sighting->user] as $recipient) {
                 $recipient->notifications()->create([
                     'id' => (string) Str::uuid(),

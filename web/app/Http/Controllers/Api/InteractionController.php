@@ -9,6 +9,7 @@ use App\Models\Post;
 use App\Models\User;
 use App\Services\ImageReencoder;
 use App\Services\TextMasker;
+use App\Support\PublicMediaUrl;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -19,13 +20,18 @@ class InteractionController extends Controller
     public function comments(Post $post): JsonResponse
     {
         $comments = $post->comments()
-            ->with('author:id,first_name')
+            ->with('author:id,first_name,last_name,profile_picture_path')
             ->latest()
             ->paginate(30)
             ->through(fn (Comment $comment): array => [
                 'id' => $comment->id,
                 'body' => $comment->body,
+                'author_id' => $comment->user_id,
                 'author_first_name' => $comment->author->first_name,
+                'author_last_name' => $comment->author->last_name,
+                'author_profile_picture_url' => $comment->author->profile_picture_path
+                    ? PublicMediaUrl::forPath($comment->author->profile_picture_path)
+                    : null,
                 'created_at' => $comment->created_at,
             ]);
 
@@ -34,7 +40,7 @@ class InteractionController extends Controller
 
     public function comment(Request $request, Post $post, TextMasker $masker): JsonResponse
     {
-        abort_unless(in_array($post->status, ['active', 'claim_pending', 'approved_for_meetup'], true), 404);
+        abort_unless(in_array($post->status, ['active', 'claim_pending', 'handover_pending'], true), 404);
         $data = $request->validate(['body' => ['required', 'string', 'max:2000']]);
         $limit = (int) DB::table('settings')->where('key', 'comments_per_day')->value('value') ?: 30;
         abort_if($request->user()->comments()->whereDate('created_at', today())->count() >= $limit, 429, 'Daily comment limit reached.');
@@ -161,7 +167,7 @@ class InteractionController extends Controller
                     'id' => $sighting->id,
                     'user_first_name' => $sighting->user->first_name,
                     'evidence_text' => $sighting->evidence_text,
-                    'evidence_image' => $sighting->evidence_image ? asset('storage/'.$sighting->evidence_image) : null,
+                    'evidence_image' => $sighting->evidence_image ? PublicMediaUrl::forPath($sighting->evidence_image) : null,
                     'author_decision' => $sighting->author_decision,
                     'admin_decision' => $sighting->admin_decision,
                     'handover_id' => $sighting->handover?->id,

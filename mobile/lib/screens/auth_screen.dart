@@ -2,7 +2,9 @@ import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 
 import '../core/api_client.dart';
+import '../core/theme.dart';
 import '../services/auth_service.dart';
+import '../widgets/campuslf_brand_mark.dart';
 
 class AuthScreen extends StatefulWidget {
   const AuthScreen({
@@ -53,7 +55,8 @@ class _AuthScreenState extends State<AuthScreen> {
         final message = widget.api.errorMessage(error);
         setState(() {
           _error = message;
-          _showVerifyAction = error.response?.statusCode == 403 &&
+          _showVerifyAction =
+              error.response?.statusCode == 403 &&
               message == 'Verify your TMC email before signing in.';
         });
       }
@@ -77,6 +80,21 @@ class _AuthScreenState extends State<AuthScreen> {
     });
   }
 
+  Future<void> _forgotPassword() async {
+    final message = await Navigator.of(context).push<String>(
+      MaterialPageRoute(
+        builder: (_) =>
+            ForgotPasswordScreen(api: widget.api, auth: widget.auth),
+      ),
+    );
+    if (message != null && mounted) {
+      setState(() {
+        _message = message;
+        _error = null;
+      });
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -93,11 +111,17 @@ class _AuthScreenState extends State<AuthScreen> {
                   children: [
                     const _BrandMark(),
                     const SizedBox(height: 28),
-                    Text('Welcome to CampusLF', style: Theme.of(context).textTheme.headlineSmall),
+                    Text(
+                      'Welcome to CampusLF',
+                      style: Theme.of(context).textTheme.headlineSmall,
+                    ),
                     const SizedBox(height: 8),
-                    const Text('Lost something? Found something? Let’s connect it at TMC.'),
+                    const Text(
+                      'Lost something? Found something? Let’s connect it at TMC.',
+                    ),
                     const SizedBox(height: 28),
-                    if (_message != null) _Notice(text: _message!, success: true),
+                    if (_message != null)
+                      _Notice(text: _message!, success: true),
                     if (_error != null) _Notice(text: _error!, success: false),
                     if (_showVerifyAction)
                       TextButton(
@@ -106,14 +130,14 @@ class _AuthScreenState extends State<AuthScreen> {
                             : () async {
                                 final result = await Navigator.of(context)
                                     .push<_RegistrationResult>(
-                                  MaterialPageRoute(
-                                    builder: (_) => RegistrationScreen(
-                                      api: widget.api,
-                                      auth: widget.auth,
-                                      initialEmail: _email.text.trim(),
-                                    ),
-                                  ),
-                                );
+                                      MaterialPageRoute(
+                                        builder: (_) => RegistrationScreen(
+                                          api: widget.api,
+                                          auth: widget.auth,
+                                          initialEmail: _email.text.trim(),
+                                        ),
+                                      ),
+                                    );
                                 if (!mounted || result == null) return;
                                 setState(() {
                                   _email.text = result.email;
@@ -129,9 +153,13 @@ class _AuthScreenState extends State<AuthScreen> {
                       keyboardType: TextInputType.emailAddress,
                       textInputAction: TextInputAction.next,
                       autofillHints: const [AutofillHints.email],
-                      decoration: const InputDecoration(labelText: 'TMC email *'),
+                      decoration: const InputDecoration(
+                        labelText: 'TMC email *',
+                      ),
                       validator: (value) {
-                        if (value == null || !value.contains('@')) return 'Enter a valid email.';
+                        if (value == null || !value.contains('@')) {
+                          return 'Enter a valid email.';
+                        }
                         return null;
                       },
                     ),
@@ -144,37 +172,259 @@ class _AuthScreenState extends State<AuthScreen> {
                       decoration: InputDecoration(
                         labelText: 'Password *',
                         suffixIcon: IconButton(
-                          tooltip: _showPassword ? 'Hide password' : 'Show password',
-                          onPressed: () => setState(() => _showPassword = !_showPassword),
-                          icon: Icon(_showPassword ? Icons.visibility_off : Icons.visibility),
+                          tooltip: _showPassword
+                              ? 'Hide password'
+                              : 'Show password',
+                          onPressed: () =>
+                              setState(() => _showPassword = !_showPassword),
+                          icon: Icon(
+                            _showPassword
+                                ? Icons.visibility_off
+                                : Icons.visibility,
+                          ),
                         ),
                       ),
-                      validator: (value) => value == null || value.isEmpty ? 'Enter your password.' : null,
+                      validator: (value) => value == null || value.isEmpty
+                          ? 'Enter your password.'
+                          : null,
+                    ),
+                    Align(
+                      alignment: Alignment.centerRight,
+                      child: TextButton(
+                        onPressed: _busy ? null : _forgotPassword,
+                        child: const Text('Forgot password?'),
+                      ),
                     ),
                     const SizedBox(height: 20),
                     FilledButton(
                       onPressed: _busy ? null : _login,
                       child: _busy
-                          ? const SizedBox.square(dimension: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                          ? const SizedBox.square(
+                              dimension: 20,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                color: Colors.white,
+                              ),
+                            )
                           : const Text('Log in'),
                     ),
                     const SizedBox(height: 10),
                     OutlinedButton(
                       onPressed: _busy ? null : _register,
-                      style: OutlinedButton.styleFrom(minimumSize: const Size.fromHeight(48)),
+                      style: OutlinedButton.styleFrom(
+                        minimumSize: const Size.fromHeight(48),
+                      ),
                       child: const Text('Create account'),
                     ),
                     const SizedBox(height: 18),
-                    const Text(
+                    Text(
                       'TMC CampusLF helps members connect. We do not keep, guarantee, or insure items. Report valuables to the official TMC office.',
                       textAlign: TextAlign.center,
-                      style: TextStyle(fontSize: 12, color: Color(0xFF6B6262)),
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: Theme.of(context).colorScheme.onSurfaceVariant,
+                      ),
                     ),
                   ],
                 ),
               ),
             ),
           ),
+        ),
+      ),
+    );
+  }
+}
+
+class ForgotPasswordScreen extends StatefulWidget {
+  const ForgotPasswordScreen({
+    required this.api,
+    required this.auth,
+    super.key,
+  });
+
+  final ApiClient api;
+  final AuthService auth;
+
+  @override
+  State<ForgotPasswordScreen> createState() => _ForgotPasswordScreenState();
+}
+
+class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
+  final _email = TextEditingController();
+  final _code = TextEditingController();
+  final _password = TextEditingController();
+  final _confirm = TextEditingController();
+  int _step = 0;
+  bool _busy = false;
+  String? _resetToken;
+  String? _message;
+  String? _error;
+
+  @override
+  void dispose() {
+    _email.dispose();
+    _code.dispose();
+    _password.dispose();
+    _confirm.dispose();
+    super.dispose();
+  }
+
+  Future<void> _submit() async {
+    if (_busy) return;
+    final email = _email.text.trim();
+    if (_step == 0 &&
+        !RegExp(
+          r'^[^@\s]+@gmail\.com$',
+          caseSensitive: false,
+        ).hasMatch(email)) {
+      setState(
+        () => _error = 'Enter the Gmail address connected to your account.',
+      );
+      return;
+    }
+    if (_step == 1 && !RegExp(r'^\d{6}$').hasMatch(_code.text.trim())) {
+      setState(() => _error = 'Enter the six-digit code sent to your Gmail.');
+      return;
+    }
+    if (_step == 2 && _password.text.length < 10) {
+      setState(() => _error = 'Use at least 10 characters for your password.');
+      return;
+    }
+    if (_step == 2 && _password.text != _confirm.text) {
+      setState(() => _error = 'Passwords do not match.');
+      return;
+    }
+
+    setState(() {
+      _busy = true;
+      _error = null;
+      _message = null;
+    });
+    try {
+      if (_step == 0) {
+        final message = await widget.auth.requestPasswordReset(email);
+        if (mounted) {
+          setState(() {
+            _step = 1;
+            _message = message;
+          });
+        }
+      } else if (_step == 1) {
+        _resetToken = await widget.auth.verifyPasswordResetOtp(
+          email,
+          _code.text.trim(),
+        );
+        if (mounted) {
+          setState(() {
+            _step = 2;
+            _message = 'Code verified. Choose a new password.';
+          });
+        }
+      } else {
+        final message = await widget.auth.resetPassword(
+          email: email,
+          resetToken: _resetToken!,
+          password: _password.text,
+          passwordConfirmation: _confirm.text,
+        );
+        if (mounted) Navigator.of(context).pop(message);
+      }
+    } on DioException catch (error) {
+      if (mounted) setState(() => _error = widget.api.errorMessage(error));
+    } catch (error) {
+      if (mounted) setState(() => _error = error.toString());
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _resendCode() async {
+    if (_busy) return;
+    setState(() {
+      _busy = true;
+      _error = null;
+      _message = null;
+    });
+    try {
+      final message = await widget.auth.requestPasswordReset(_email.text);
+      if (mounted) setState(() => _message = message);
+    } on DioException catch (error) {
+      if (mounted) setState(() => _error = widget.api.errorMessage(error));
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final titles = ['Reset password', 'Verify code', 'Choose new password'];
+    return Scaffold(
+      appBar: AppBar(title: Text(titles[_step])),
+      body: SafeArea(
+        child: ListView(
+          padding: const EdgeInsets.all(20),
+          children: [
+            if (_error != null) _Notice(text: _error!, success: false),
+            if (_message != null) _Notice(text: _message!, success: true),
+            if (_step == 0) ...[
+              const Text('Enter the Gmail address connected to your account.'),
+              const SizedBox(height: 16),
+              TextField(
+                controller: _email,
+                keyboardType: TextInputType.emailAddress,
+                autofillHints: const [AutofillHints.email],
+                decoration: const InputDecoration(labelText: 'Gmail address'),
+              ),
+            ] else if (_step == 1) ...[
+              Text('Enter the six-digit code sent to ${_email.text.trim()}.'),
+              const SizedBox(height: 16),
+              TextField(
+                controller: _code,
+                keyboardType: TextInputType.number,
+                maxLength: 6,
+                decoration: const InputDecoration(
+                  labelText: 'Verification code',
+                ),
+              ),
+              TextButton(
+                onPressed: _busy ? null : _resendCode,
+                child: const Text('Resend code'),
+              ),
+            ] else ...[
+              TextField(
+                controller: _password,
+                obscureText: true,
+                autofillHints: const [AutofillHints.newPassword],
+                decoration: const InputDecoration(
+                  labelText: 'New password (10+ characters)',
+                ),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: _confirm,
+                obscureText: true,
+                decoration: const InputDecoration(
+                  labelText: 'Confirm new password',
+                ),
+              ),
+            ],
+            const SizedBox(height: 20),
+            FilledButton(
+              onPressed: _busy ? null : _submit,
+              child: _busy
+                  ? const SizedBox.square(
+                      dimension: 20,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: Colors.white,
+                      ),
+                    )
+                  : Text(
+                      ['Send code', 'Verify code', 'Save new password'][_step],
+                    ),
+            ),
+          ],
         ),
       ),
     );
@@ -216,6 +466,8 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
   bool _busy = false;
   bool _captchaLoading = false;
   bool _otpSent = false;
+  bool _showPassword = false;
+  bool _showConfirmPassword = false;
   String? _message;
   String? _error;
 
@@ -233,8 +485,15 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
   @override
   void dispose() {
     for (final controller in [
-      _firstName, _lastName, _id, _email, _userTypeOther, _password, _confirm,
-      _captchaAnswer, _otp,
+      _firstName,
+      _lastName,
+      _id,
+      _email,
+      _userTypeOther,
+      _password,
+      _confirm,
+      _captchaAnswer,
+      _otp,
     ]) {
       controller.dispose();
     }
@@ -267,16 +526,24 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
   Future<void> _submit() async {
     if (_busy) return;
     if (!_otpSent && (_captchaLoading || _captchaToken.isEmpty)) {
-      setState(() => _error = 'The security check is not ready. Tap refresh and try again.');
+      setState(
+        () => _error =
+            'The security check is not ready. Tap refresh and try again.',
+      );
       return;
     }
     if (!_otpSent && !_formKey.currentState!.validate()) return;
     if (_otpSent && _otp.text.trim().length != 6) {
-      setState(() => _error = 'Enter the six-digit code sent to your TMC email.');
+      setState(
+        () => _error = 'Enter the six-digit code sent to your TMC email.',
+      );
       return;
     }
     if (!_otpSent && !_termsAccepted) {
-      setState(() => _error = 'Accept the Terms, Privacy Notice, and Disclaimer to continue.');
+      setState(
+        () => _error =
+            'Accept the Terms, Privacy Notice, and Disclaimer to continue.',
+      );
       return;
     }
     setState(() {
@@ -284,6 +551,7 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
       _error = null;
       _message = null;
     });
+    var refreshCaptcha = false;
     try {
       if (!_otpSent) {
         final message = await widget.auth.register(
@@ -293,7 +561,9 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
             'tmc_id_no': _id.text.trim(),
             'email': _email.text.trim(),
             'user_type': _userType,
-            'user_type_other': _userType == 'other' ? _userTypeOther.text.trim() : null,
+            'user_type_other': _userType == 'other'
+                ? _userTypeOther.text.trim()
+                : null,
             'department': _department,
             'password': _password.text,
             'password_confirmation': _confirm.text,
@@ -306,23 +576,36 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
           _message = message;
         });
       } else {
-        final message = await widget.auth.verifyOtp(_email.text, _otp.text.trim());
-        if (mounted) Navigator.of(context).pop(_RegistrationResult(_email.text.trim(), message));
+        final message = await widget.auth.verifyOtp(
+          _email.text,
+          _otp.text.trim(),
+        );
+        if (mounted) {
+          Navigator.of(context)
+              .pop(_RegistrationResult(_email.text.trim(), message));
+        }
       }
     } on DioException catch (error) {
       if (mounted) setState(() => _error = widget.api.errorMessage(error));
-      if (!_otpSent) await _loadCaptcha();
+      refreshCaptcha = !_otpSent;
+    } catch (error) {
+      if (mounted) setState(() => _error = error.toString());
+      refreshCaptcha = !_otpSent;
     } finally {
       if (mounted) setState(() => _busy = false);
     }
+    if (refreshCaptcha) await _loadCaptcha();
   }
 
-  String? _required(String? value) => value == null || value.trim().isEmpty ? 'This field is required.' : null;
+  String? _required(String? value) =>
+      value == null || value.trim().isEmpty ? 'This field is required.' : null;
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: Text(_otpSent ? 'Verify your email' : 'Create account')),
+      appBar: AppBar(
+        title: Text(_otpSent ? 'Verify your email' : 'Create account'),
+      ),
       body: SafeArea(
         child: Form(
           key: _formKey,
@@ -331,13 +614,17 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
             children: [
               if (_error != null) _Notice(text: _error!, success: false),
               if (_otpSent) ...[
-                const Text('Enter the six-digit code sent to your TMC email. Unmatched masterlist records wait for administrator approval.'),
+                const Text(
+                  'Enter the six-digit code sent to your TMC email. Unmatched masterlist records wait for administrator approval.',
+                ),
                 const SizedBox(height: 20),
                 TextFormField(
                   controller: _otp,
                   keyboardType: TextInputType.number,
                   maxLength: 6,
-                  decoration: const InputDecoration(labelText: 'Verification code'),
+                  decoration: const InputDecoration(
+                    labelText: 'Verification code',
+                  ),
                 ),
                 if (_message != null) _Notice(text: _message!, success: true),
                 TextButton(
@@ -350,14 +637,17 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
                             _message = null;
                           });
                           try {
-                            final message =
-                                await widget.auth.resendOtp(_email.text);
+                            final message = await widget.auth.resendOtp(
+                              _email.text,
+                            );
                             if (mounted) {
                               setState(() => _message = message);
                             }
                           } on DioException catch (error) {
                             if (mounted) {
-                              setState(() => _error = widget.api.errorMessage(error));
+                              setState(
+                                () => _error = widget.api.errorMessage(error),
+                              );
                             }
                           } finally {
                             if (mounted) setState(() => _busy = false);
@@ -366,16 +656,32 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
                   child: const Text('Resend code'),
                 ),
               ] else ...[
-                TextFormField(controller: _firstName, decoration: const InputDecoration(labelText: 'First name *'), validator: _required),
+                TextFormField(
+                  controller: _firstName,
+                  decoration: const InputDecoration(labelText: 'First name *'),
+                  validator: _required,
+                ),
                 const SizedBox(height: 12),
-                TextFormField(controller: _lastName, decoration: const InputDecoration(labelText: 'Last name *'), validator: _required),
+                TextFormField(
+                  controller: _lastName,
+                  decoration: const InputDecoration(labelText: 'Last name *'),
+                  validator: _required,
+                ),
                 const SizedBox(height: 12),
-                TextFormField(controller: _id, decoration: const InputDecoration(labelText: 'TMC ID number *'), validator: _required),
+                TextFormField(
+                  controller: _id,
+                  decoration: const InputDecoration(
+                    labelText: 'TMC ID number *',
+                  ),
+                  validator: _required,
+                ),
                 const SizedBox(height: 12),
                 TextFormField(
                   controller: _email,
                   keyboardType: TextInputType.emailAddress,
-                  decoration: const InputDecoration(labelText: 'Gmail address *'),
+                  decoration: const InputDecoration(
+                    labelText: 'Gmail address *',
+                  ),
                   validator: (value) {
                     final email = value?.trim().toLowerCase() ?? '';
                     return email.contains('@') && email.endsWith('@gmail.com')
@@ -390,7 +696,10 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
                   items: const [
                     DropdownMenuItem(value: 'student', child: Text('Student')),
                     DropdownMenuItem(value: 'staff', child: Text('Staff')),
-                    DropdownMenuItem(value: 'instructor', child: Text('Instructor')),
+                    DropdownMenuItem(
+                      value: 'instructor',
+                      child: Text('Instructor'),
+                    ),
                     DropdownMenuItem(value: 'other', child: Text('Others')),
                   ],
                   onChanged: (value) => setState(() {
@@ -402,14 +711,18 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
                 if (_userType == 'other') ...[
                   TextFormField(
                     controller: _userTypeOther,
-                    decoration: const InputDecoration(labelText: 'Please Specify user type *'),
+                    decoration: const InputDecoration(
+                      labelText: 'Please Specify user type *',
+                    ),
                     validator: _required,
                   ),
                   const SizedBox(height: 12),
                 ],
                 DropdownButtonFormField<String>(
                   initialValue: _department,
-                  decoration: const InputDecoration(labelText: 'Department / program *'),
+                  decoration: const InputDecoration(
+                    labelText: 'Department / program *',
+                  ),
                   items: const [
                     DropdownMenuItem(value: 'CCS', child: Text('CCS')),
                     DropdownMenuItem(value: 'CRIM', child: Text('CRIM')),
@@ -418,12 +731,54 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
                     DropdownMenuItem(value: 'BSOA', child: Text('BSOA')),
                     DropdownMenuItem(value: 'BSED', child: Text('BSED')),
                   ],
-                  onChanged: (value) => setState(() => _department = value ?? 'CCS'),
+                  onChanged: (value) =>
+                      setState(() => _department = value ?? 'CCS'),
                 ),
                 const SizedBox(height: 12),
-                TextFormField(controller: _password, obscureText: true, decoration: const InputDecoration(labelText: 'Password (10+ characters) *'), validator: (value) => value != null && value.length >= 10 ? null : 'Use at least 10 characters.'),
+                TextFormField(
+                  controller: _password,
+                  obscureText: !_showPassword,
+                  decoration: InputDecoration(
+                    labelText: 'Password (10+ characters) *',
+                    suffixIcon: IconButton(
+                      tooltip: _showPassword
+                          ? 'Hide password'
+                          : 'Show password',
+                      onPressed: () =>
+                          setState(() => _showPassword = !_showPassword),
+                      icon: Icon(
+                        _showPassword ? Icons.visibility_off : Icons.visibility,
+                      ),
+                    ),
+                  ),
+                  validator: (value) => value != null && value.length >= 10
+                      ? null
+                      : 'Use at least 10 characters.',
+                ),
                 const SizedBox(height: 12),
-                TextFormField(controller: _confirm, obscureText: true, decoration: const InputDecoration(labelText: 'Confirm password *'), validator: (value) => value == _password.text ? null : 'Passwords do not match.'),
+                TextFormField(
+                  controller: _confirm,
+                  obscureText: !_showConfirmPassword,
+                  decoration: InputDecoration(
+                    labelText: 'Confirm password *',
+                    suffixIcon: IconButton(
+                      tooltip: _showConfirmPassword
+                          ? 'Hide password'
+                          : 'Show password',
+                      onPressed: () => setState(
+                        () => _showConfirmPassword = !_showConfirmPassword,
+                      ),
+                      icon: Icon(
+                        _showConfirmPassword
+                            ? Icons.visibility_off
+                            : Icons.visibility,
+                      ),
+                    ),
+                  ),
+                  validator: (value) => value == _password.text
+                      ? null
+                      : 'Passwords do not match.',
+                ),
                 const SizedBox(height: 12),
                 TextFormField(
                   controller: _captchaAnswer,
@@ -447,8 +802,11 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
                 CheckboxListTile(
                   contentPadding: EdgeInsets.zero,
                   value: _termsAccepted,
-                  onChanged: (value) => setState(() => _termsAccepted = value ?? false),
-                  title: const Text('I accept the Terms and Privacy Notice. I understand CampusLF does not keep or insure items.'),
+                  onChanged: (value) =>
+                      setState(() => _termsAccepted = value ?? false),
+                  title: const Text(
+                    'I accept the Terms and Privacy Notice. I understand CampusLF does not keep or insure items.',
+                  ),
                   controlAffinity: ListTileControlAffinity.leading,
                 ),
               ],
@@ -456,8 +814,18 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
               FilledButton(
                 onPressed: _busy ? null : _submit,
                 child: _busy
-                    ? const SizedBox.square(dimension: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-                    : Text(_otpSent ? 'Verify email' : 'Continue to email verification'),
+                    ? const SizedBox.square(
+                        dimension: 20,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: Colors.white,
+                        ),
+                      )
+                    : Text(
+                        _otpSent
+                            ? 'Verify email'
+                            : 'Continue to email verification',
+                      ),
               ),
             ],
           ),
@@ -480,14 +848,12 @@ class _BrandMark extends StatelessWidget {
   Widget build(BuildContext context) {
     return Row(
       children: [
-        Container(
-          width: 52,
-          height: 52,
-          decoration: BoxDecoration(color: const Color(0xFFF2B705), borderRadius: BorderRadius.circular(14)),
-          child: const Center(child: Text('LF', style: TextStyle(color: Color(0xFF7A0F18), fontSize: 20, fontWeight: FontWeight.w800))),
-        ),
+        const CampusLfBrandMark(size: 44),
         const SizedBox(width: 12),
-        const Text('TMC CampusLF', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
+        const Text(
+          'TMC CampusLF',
+          style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
+        ),
       ],
     );
   }
@@ -500,14 +866,25 @@ class _Notice extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final successSurface = Theme.of(context).brightness == Brightness.dark
+        ? CampusTheme.otherSurfaceDark
+        : CampusTheme.otherSurface;
+    final errorSurface = Theme.of(context).colorScheme.errorContainer;
     return Container(
       margin: const EdgeInsets.only(bottom: 14),
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: success ? const Color(0xFFE8F5E9) : const Color(0xFFFFEBEE),
+        color: success ? successSurface : errorSurface,
         borderRadius: BorderRadius.circular(10),
       ),
-      child: Text(text, style: TextStyle(color: success ? const Color(0xFF2E7D32) : const Color(0xFFC62828))),
+      child: Text(
+        text,
+        style: TextStyle(
+          color: success
+              ? CampusTheme.other
+              : Theme.of(context).colorScheme.onErrorContainer,
+        ),
+      ),
     );
   }
 }

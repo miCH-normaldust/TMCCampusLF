@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
 use App\Models\ClaimRequest;
+use App\Models\PostRetrievalRequest;
 use Illuminate\Http\Request;
 use Illuminate\View\View;
 
@@ -24,6 +25,16 @@ class ClaimListController extends Controller
             ->paginate(25)
             ->withQueryString();
 
-        return view('admin.claims', ['claims' => $claims]);
+        return view('admin.claims', [
+            'claims' => $claims,
+            'retrievalRequests' => PostRetrievalRequest::with([
+                'post:id,item_name,type,status,user_id',
+                'user:id,first_name,last_name,email',
+            ])
+                ->where('status', 'pending')
+                ->whereHas('post', fn ($query) => $query->where('type', 'found'))
+                ->latest()
+                ->get(),
+        ]);
     }
 }

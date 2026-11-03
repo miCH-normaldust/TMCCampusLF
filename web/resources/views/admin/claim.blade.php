@@ -24,16 +24,9 @@
         <h2>Decision</h2>
         <form method="post" action="{{ route('admin.claims.decide', $claim) }}">
             @csrf
-            <label for="location_id">Meet-up location (required for approval)</label><br>
-            <select id="location_id" name="location_id">
-                <option value="">Choose an active location</option>
-                @foreach ($meetupLocations as $location)
-                    <option value="{{ $location->id }}">{{ $location->name }} — {{ $location->operating_hours }}</option>
-                @endforeach
-            </select>
+            <p class="muted">Approval sends the claim to the item poster for their agreement. Handover starts only after both administrator review and poster consent.</p>
             <p><label for="reason">Reason (required when rejecting)</label><br><textarea id="reason" name="reason" rows="3" maxlength="1000"></textarea></p>
             @error('decision')<p class="muted">{{ $message }}</p>@enderror
-            @error('location_id')<p class="muted">{{ $message }}</p>@enderror
             @error('reason')<p class="muted">{{ $message }}</p>@enderror
             <button class="button" name="decision" value="approve" type="submit">Approve claim</button>
             <button class="button danger" name="decision" value="reject" type="submit" onclick="return confirm('Reject this claim?')">Reject claim</button>

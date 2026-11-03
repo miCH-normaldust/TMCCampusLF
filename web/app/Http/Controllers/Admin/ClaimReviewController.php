@@ -22,7 +22,6 @@ class ClaimReviewController extends Controller
                 'post.verificationQuestions',
                 'claimant:id,first_name,last_name,tmc_id_no,email',
             ]),
-            'meetupLocations' => DB::table('meetup_locations')->where('is_active', true)->orderBy('name')->get(),
         ]);
     }
 
@@ -31,7 +30,6 @@ class ClaimReviewController extends Controller
         $data = $request->validate([
             'decision' => ['required', 'in:approve,reject'],
             'reason' => ['required_if:decision,reject', 'nullable', 'string', 'max:1000'],
-            'location_id' => ['required_if:decision,approve', 'nullable', 'exists:meetup_locations,id'],
         ]);
 
         abort_unless($claim->status === 'pending', 409, 'This claim has already been reviewed.');
@@ -40,11 +38,11 @@ class ClaimReviewController extends Controller
             if ($data['decision'] === 'approve') {
                 $claim->update([
                     'status' => 'approved',
+                    'author_decision' => 'pending',
                     'reviewed_by' => $request->user('admin')->id,
                     'reviewed_at' => now(),
-                    'location_id' => $data['location_id'],
                 ]);
-                $claim->post->update(['status' => 'approved_for_meetup']);
+                $claim->post->update(['status' => 'handover_pending']);
                 $otherClaims = ClaimRequest::with('claimant')
                     ->where('post_id', $claim->post_id)
                     ->where('id', '!=', $claim->id)
@@ -75,11 +73,21 @@ class ClaimReviewController extends Controller
                 $claim->claimant->notifications()->create([
                     'id' => (string) Str::uuid(),
                     'type' => 'claim_approved',
-                    'data' => ['title' => 'Claim approved', 'body' => 'Your claim was approved. You can now arrange a safe handover.'],
+                    'data' => ['title' => 'Claim approved for owner review', 'body' => 'An administrator approved your claim. The item poster must agree before handover can proceed.'],
+                ]);
+                $claim->post->author->notifications()->create([
+                    'id' => (string) Str::uuid(),
+                    'type' => 'claim_owner_review',
+                    'data' => [
+                        'title' => 'A claim is ready for your decision',
+                        'body' => 'An administrator approved a claim for '.$claim->post->item_name.'. Confirm whether you agree to hand over the item.',
+                        'claim_id' => $claim->id,
+                    ],
                 ]);
             } else {
                 $claim->update([
                     'status' => 'rejected',
+                    'author_decision' => 'rejected',
                     'reviewed_by' => $request->user('admin')->id,
                     'reviewed_at' => now(),
                 ]);

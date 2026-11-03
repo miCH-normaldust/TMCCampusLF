@@ -4,6 +4,11 @@
 
 @section('content')
     <h1>Lost-item evidence</h1>
+    @include('admin.partials.retrieval-requests', [
+        'retrievalRequests' => $retrievalRequests,
+        'heading' => 'Lost-item mark-as-retrieved requests',
+        'description' => 'Review requests from owners who recovered their own lost item.',
+    ])
     <section class="cards">
         @forelse ($sightings as $sighting)
             <article class="card">
@@ -12,7 +17,7 @@
                 <p class="muted">Owner: {{ $sighting->post->author->first_name }} · Evidence from {{ $sighting->user->first_name }}</p>
                 <p>{{ $sighting->evidence_text }}</p>
                 @if ($sighting->evidence_image)
-                    <img src="{{ asset('storage/'.$sighting->evidence_image) }}" alt="Evidence photo for {{ $sighting->post->item_name }}" style="max-width:100%;height:auto;border-radius:10px">
+                    <img src="{{ \App\Support\PublicMediaUrl::forPath($sighting->evidence_image) }}" alt="Evidence photo for {{ $sighting->post->item_name }}" style="max-width:100%;height:auto;border-radius:10px">
                 @endif
                 <form method="post" action="{{ route('admin.sightings.decide', $sighting) }}">
                     @csrf

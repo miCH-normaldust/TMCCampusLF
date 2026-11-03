@@ -67,6 +67,46 @@ class AuthService {
         'A verification code was sent to your TMC email.';
   }
 
+  Future<String> requestPasswordReset(String email) async {
+    final response = await _api.dio.post<Map<String, dynamic>>(
+      '/forgot-password',
+      data: {'email': email.trim()},
+    );
+    return response.data?['message'] as String? ??
+        'A password reset code was sent to your Gmail address.';
+  }
+
+  Future<String> verifyPasswordResetOtp(String email, String code) async {
+    final response = await _api.dio.post<Map<String, dynamic>>(
+      '/forgot-password/verify-otp',
+      data: {'email': email.trim(), 'code': code},
+    );
+    final token = response.data?['reset_token'];
+    if (token is! String || token.isEmpty) {
+      throw StateError('The server did not return a password reset token.');
+    }
+    return token;
+  }
+
+  Future<String> resetPassword({
+    required String email,
+    required String resetToken,
+    required String password,
+    required String passwordConfirmation,
+  }) async {
+    final response = await _api.dio.post<Map<String, dynamic>>(
+      '/forgot-password/reset',
+      data: {
+        'email': email.trim(),
+        'reset_token': resetToken,
+        'password': password,
+        'password_confirmation': passwordConfirmation,
+      },
+    );
+    return response.data?['message'] as String? ??
+        'Password changed. You can now sign in.';
+  }
+
   Future<void> logout() async {
     try {
       await _api.dio.post<void>('/logout');

@@ -12,26 +12,37 @@
 <div class="shell">
     <aside class="side">
         <div class="brand">
-            <span class="brand-mark" aria-hidden="true">LF</span>
+            <span class="campuslf-brand-mark" aria-hidden="true">
+                <span class="brand-lf">LF</span>
+                <img src="{{ asset('images/tmc-logo.png') }}" alt="">
+            </span>
             <button class="drawer-toggle" type="button" aria-label="Collapse navigation" aria-expanded="true" title="Collapse navigation">‹</button>
             <span class="nav-label">TMC CampusLF</span>
         </div>
         <nav class="nav" aria-label="Admin navigation">
             @php
-                $navigation = [
-                    ['label' => 'Dashboard', 'icon' => '⌂', 'route' => 'admin.dashboard', 'active' => 'admin.dashboard'],
+                $pinnedNavigation = [
+                    ['label' => 'Home', 'icon' => '⌂', 'route' => 'admin.dashboard', 'active' => 'admin.dashboard'],
                     ['label' => 'Community Feed', 'icon' => '▤', 'route' => 'admin.community-feed.index', 'active' => 'admin.community-feed.*'],
-                    ['label' => 'Found Item Claims', 'icon' => '✓', 'route' => 'admin.claims.index', 'active' => 'admin.claims.*', 'count' => 'claims'],
-                    ['label' => 'Lost Item Proofs', 'icon' => '⌕', 'route' => 'admin.sightings.index', 'active' => 'admin.sightings.*', 'count' => 'sightings'],
-                    ['label' => 'Handovers', 'icon' => '⇄', 'route' => 'admin.handovers.index', 'active' => 'admin.handovers.*', 'count' => 'handovers'],
-                    ['label' => 'Users', 'icon' => '♙', 'route' => 'admin.users.index', 'active' => 'admin.users.*'],
-                    ['label' => 'Activity', 'icon' => '◷', 'route' => 'admin.activity.index', 'active' => 'admin.activity.*'],
-                    ['label' => 'Audit Trail', 'icon' => '▣', 'route' => 'admin.audit.index', 'active' => 'admin.audit.*'],
-                    ['label' => 'Reports', 'icon' => '⚑', 'route' => 'admin.reports.index', 'active' => 'admin.reports.*', 'count' => 'reports'],
-                    ['label' => 'Settings', 'icon' => '⚙', 'route' => 'admin.settings.index', 'active' => 'admin.settings.*'],
+                ];
+                $navigationGroups = [
+                    'Transactions' => [
+                        ['label' => 'Found Item Claims', 'icon' => '✓', 'route' => 'admin.claims.index', 'active' => 'admin.claims.*', 'count' => 'claims'],
+                        ['label' => 'Lost Item Proofs', 'icon' => '⌕', 'route' => 'admin.sightings.index', 'active' => 'admin.sightings.*', 'count' => 'sightings'],
+                        ['label' => 'Handovers', 'icon' => '⇄', 'route' => 'admin.handovers.index', 'active' => 'admin.handovers.index', 'count' => 'handovers'],
+                        ['label' => 'Handover History', 'icon' => '◷', 'route' => 'admin.handovers.history', 'active' => 'admin.handovers.history*'],
+                    ],
+                    'Monitoring and Maintenance' => [
+                        ['label' => 'Users', 'icon' => '♙', 'route' => 'admin.users.index', 'active' => 'admin.users.*'],
+                        ['label' => 'Reports', 'icon' => '⚑', 'route' => 'admin.reports.index', 'active' => 'admin.reports.*', 'count' => 'reports'],
+                        ['label' => 'Feedback', 'icon' => '✉', 'route' => 'admin.feedback.index', 'active' => 'admin.feedback.*', 'count' => 'feedback'],
+                        ['label' => 'Activity', 'icon' => '◷', 'route' => 'admin.activity.index', 'active' => 'admin.activity.*'],
+                        ['label' => 'Audit Trail', 'icon' => '▣', 'route' => 'admin.audit.index', 'active' => 'admin.audit.*'],
+                        ['label' => 'Settings', 'icon' => '⚙', 'route' => 'admin.settings.index', 'active' => 'admin.settings.*'],
+                    ],
                 ];
             @endphp
-            @foreach ($navigation as $item)
+            @foreach ($pinnedNavigation as $item)
                 <a href="{{ route($item['route']) }}"
                    class="nav-link {{ request()->routeIs($item['active']) ? 'active' : '' }}"
                    title="{{ $item['label'] }}"
@@ -44,6 +55,22 @@
                     @endif
                 </a>
             @endforeach
+            @foreach ($navigationGroups as $group => $items)
+                <div class="nav-group-label">{{ $group }}</div>
+                @foreach ($items as $item)
+                    <a href="{{ route($item['route']) }}"
+                       class="nav-link {{ request()->routeIs($item['active']) ? 'active' : '' }}"
+                       title="{{ $item['label'] }}"
+                       aria-label="{{ $item['label'] }}"
+                       @if (request()->routeIs($item['active'])) aria-current="page" @endif>
+                        <span class="nav-icon" aria-hidden="true">{{ $item['icon'] }}</span>
+                        <span class="nav-label">{{ $item['label'] }}</span>
+                        @if (isset($item['count']) && ($adminNavCounts[$item['count']] ?? 0) > 0)
+                            <span class="nav-count" aria-label="{{ $adminNavCounts[$item['count']] }} pending">{{ $adminNavCounts[$item['count']] }}</span>
+                        @endif
+                    </a>
+                @endforeach
+            @endforeach
         </nav>
     </aside>
     <div class="content">
@@ -52,7 +79,10 @@
                 <button class="mobile-drawer-toggle" type="button" aria-label="Toggle navigation" aria-expanded="false" title="Toggle navigation">☰</button>
                 <strong>Administration</strong>
             </div>
-            <form method="post" action="{{ route('admin.logout') }}">@csrf<button class="button secondary" type="submit">Log out</button></form>
+            <div class="top-actions">
+                <button class="button secondary theme-toggle" type="button" aria-pressed="false">Dark mode</button>
+                <form method="post" action="{{ route('admin.logout') }}">@csrf<button class="button secondary" type="submit">Log out</button></form>
+            </div>
         </header>
         <main>
             @if (session('status'))<div class="flash" role="status">{{ session('status') }}</div>@endif
@@ -66,7 +96,21 @@
         const shell = document.querySelector('.shell');
         const toggle = document.querySelector('.drawer-toggle');
         const mobileToggle = document.querySelector('.mobile-drawer-toggle');
-        if (!shell || !toggle || !mobileToggle) return;
+        const themeToggle = document.querySelector('.theme-toggle');
+        if (!shell || !toggle || !mobileToggle || !themeToggle) return;
+
+        const savedTheme = localStorage.getItem('campuslf-admin-theme');
+        const applyTheme = dark => {
+            document.body.dataset.theme = dark ? 'dark' : 'light';
+            themeToggle.textContent = dark ? 'Light mode' : 'Dark mode';
+            themeToggle.setAttribute('aria-pressed', String(dark));
+        };
+        applyTheme(savedTheme === 'dark');
+        themeToggle.addEventListener('click', () => {
+            const dark = document.body.dataset.theme !== 'dark';
+            localStorage.setItem('campuslf-admin-theme', dark ? 'dark' : 'light');
+            applyTheme(dark);
+        });
 
         if (localStorage.getItem('campuslf-admin-drawer') === 'collapsed') {
             shell.classList.add('drawer-collapsed');

@@ -2,7 +2,7 @@
 
 namespace Tests\Feature;
 
-use App\Mail\RegistrationVerificationCode;
+use App\Mail\OneTimeCode;
 use App\Models\Category;
 use App\Models\Location;
 use App\Models\OtpCode;
@@ -14,6 +14,7 @@ use Illuminate\Routing\Middleware\ThrottleRequests;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Mail;
+use Symfony\Component\Mailer\Exception\TransportException;
 use Tests\TestCase;
 
 class AuthenticationAndPrivacyTest extends TestCase
@@ -119,6 +120,92 @@ class AuthenticationAndPrivacyTest extends TestCase
         ]);
     }
 
+    public function test_registration_does_not_expose_mail_transport_errors_or_keep_partial_account(): void
+    {
+        $this->withoutMiddleware(ThrottleRequests::class);
+        $email = 'mail-failure@gmail.com';
+        Mail::shouldReceive('to')
+            ->once()
+            ->with($email)
+            ->andThrow(new TransportException('SMTP credentials must not be returned to the client.'));
+
+        $challenge = $this->getJson('/api/v1/captcha')->assertOk()->json();
+        preg_match('/(\d+) \+ (\d+)/', $challenge['question'], $numbers);
+
+        $this->postJson('/api/v1/register', [
+            'first_name' => 'Mail',
+            'last_name' => 'Failure',
+            'tmc_id_no' => 'TMC-MAIL-FAILURE',
+            'email' => $email,
+            'user_type' => 'student',
+            'department' => 'CCS',
+            'password' => 'LongTestPassword!123',
+            'password_confirmation' => 'LongTestPassword!123',
+            'terms_accepted' => true,
+            'captcha_token' => $challenge['token'],
+            'captcha_answer' => (string) ((int) $numbers[1] + (int) $numbers[2]),
+        ])->assertStatus(503)
+            ->assertExactJson([
+                'message' => 'Email delivery is unavailable. Please contact the administrator or try again later.',
+            ])
+            ->assertDontSee('SMTP credentials');
+
+        $this->assertDatabaseMissing('users', ['email' => $email]);
+        $this->assertDatabaseMissing('otp_codes', [
+            'purpose' => 'registration',
+        ]);
+    }
+
+    public function test_local_registration_falls_back_to_log_and_otp_can_still_be_verified(): void
+    {
+        $this->withoutMiddleware(ThrottleRequests::class);
+        config([
+            'app.env' => 'local',
+            'mail.otp_failure_fallback' => true,
+        ]);
+        $email = 'local-mail-fallback@gmail.com';
+        $loggedCode = null;
+        $logMailer = \Mockery::mock();
+        $logMailer->shouldReceive('to')->once()->with($email)->andReturnSelf();
+        $logMailer->shouldReceive('send')
+            ->once()
+            ->with(\Mockery::on(function (OneTimeCode $mail) use (&$loggedCode): bool {
+                $loggedCode = $mail->code;
+
+                return $mail->purpose === 'registration';
+            }));
+
+        Mail::shouldReceive('to')
+            ->once()
+            ->with($email)
+            ->andThrow(new TransportException('SMTP authentication failed.'));
+        Mail::shouldReceive('mailer')->once()->with('log')->andReturn($logMailer);
+
+        $challenge = $this->getJson('/api/v1/captcha')->assertOk()->json();
+        preg_match('/(\d+) \+ (\d+)/', $challenge['question'], $numbers);
+
+        $this->postJson('/api/v1/register', [
+            'first_name' => 'Local',
+            'last_name' => 'Fallback',
+            'tmc_id_no' => 'TMC-LOCAL-FALLBACK',
+            'email' => $email,
+            'user_type' => 'student',
+            'department' => 'CCS',
+            'password' => 'LongTestPassword!123',
+            'password_confirmation' => 'LongTestPassword!123',
+            'terms_accepted' => true,
+            'captcha_token' => $challenge['token'],
+            'captcha_answer' => (string) ((int) $numbers[1] + (int) $numbers[2]),
+        ])->assertCreated()
+            ->assertJsonPath('message', 'Gmail delivery is unavailable. For local testing, find the verification code in web/storage/logs/laravel.log.');
+
+        $this->assertNotNull($loggedCode);
+        $this->postJson('/api/v1/verify-otp', [
+            'email' => $email,
+            'code' => $loggedCode,
+        ])->assertOk()->assertJsonPath('status', 'pending');
+    }
+
     public function test_registered_user_can_receive_verify_code_and_sign_in(): void
     {
         $this->withoutMiddleware(ThrottleRequests::class);
@@ -149,7 +236,7 @@ class AuthenticationAndPrivacyTest extends TestCase
             'captcha_answer' => (string) ((int) $numbers[1] + (int) $numbers[2]),
         ])->assertCreated();
 
-        Mail::assertSent(RegistrationVerificationCode::class, fn (RegistrationVerificationCode $mail): bool => $mail->hasTo('verified-member@gmail.com'));
+        Mail::assertSent(OneTimeCode::class, fn (OneTimeCode $mail): bool => $mail->hasTo('verified-member@gmail.com') && $mail->purpose === 'registration');
         $this->postJson('/api/v1/login', [
             'email' => 'verified-member@gmail.com',
             'password' => 'LongTestPassword!123',
@@ -158,9 +245,9 @@ class AuthenticationAndPrivacyTest extends TestCase
         $this->postJson('/api/v1/resend-otp', [
             'email' => 'verified-member@gmail.com',
         ])->assertOk();
-        Mail::assertSentTimes(RegistrationVerificationCode::class, 2);
-        $verificationEmail = Mail::sent(RegistrationVerificationCode::class)->last();
-        $this->assertInstanceOf(RegistrationVerificationCode::class, $verificationEmail);
+        Mail::assertSentTimes(OneTimeCode::class, 2);
+        $verificationEmail = Mail::sent(OneTimeCode::class)->last();
+        $this->assertInstanceOf(OneTimeCode::class, $verificationEmail);
 
         $this->postJson('/api/v1/verify-otp', [
             'email' => 'verified-member@gmail.com',
@@ -171,6 +258,118 @@ class AuthenticationAndPrivacyTest extends TestCase
             'email' => 'verified-member@gmail.com',
             'password' => 'LongTestPassword!123',
         ])->assertOk()->assertJsonStructure(['token', 'user' => ['email']]);
+    }
+
+    public function test_password_reset_requires_a_verified_account_and_changes_password_after_otp(): void
+    {
+        $this->withoutMiddleware(ThrottleRequests::class);
+        Mail::fake();
+        $user = User::create([
+            'first_name' => 'TMC',
+            'last_name' => 'Member',
+            'tmc_id_no' => 'TMC-RESET-1',
+            'email' => 'reset-member@gmail.com',
+            'password' => 'OldLongPassword!123',
+            'role' => 'user',
+            'status' => 'active',
+            'email_verified_at' => now(),
+        ]);
+
+        $this->postJson('/api/v1/forgot-password', [
+            'email' => 'unknown-member@gmail.com',
+        ])->assertNotFound()
+            ->assertJsonPath('message', 'No verified user account is connected to this Gmail address.');
+
+        $this->postJson('/api/v1/forgot-password', [
+            'email' => $user->email,
+        ])->assertOk();
+
+        Mail::assertSent(OneTimeCode::class, fn (OneTimeCode $mail): bool => $mail->hasTo($user->email) && $mail->purpose === 'password_reset');
+        $resetEmail = Mail::sent(OneTimeCode::class)->first();
+        $this->assertInstanceOf(OneTimeCode::class, $resetEmail);
+
+        $this->postJson('/api/v1/forgot-password/verify-otp', [
+            'email' => $user->email,
+            'code' => '000000',
+        ])->assertUnprocessable();
+        $this->assertDatabaseHas('otp_codes', [
+            'user_id' => $user->id,
+            'purpose' => 'password_reset',
+            'attempts' => 1,
+        ]);
+
+        $resetToken = $this->postJson('/api/v1/forgot-password/verify-otp', [
+            'email' => $user->email,
+            'code' => $resetEmail->code,
+        ])->assertOk()->json('reset_token');
+
+        $this->postJson('/api/v1/forgot-password/reset', [
+            'email' => $user->email,
+            'reset_token' => $resetToken,
+            'password' => 'NewLongPassword!456',
+            'password_confirmation' => 'DifferentLongPassword!789',
+        ])->assertUnprocessable()->assertJsonValidationErrors('password');
+
+        $this->postJson('/api/v1/forgot-password/reset', [
+            'email' => $user->email,
+            'reset_token' => $resetToken,
+            'password' => 'NewLongPassword!456',
+            'password_confirmation' => 'NewLongPassword!456',
+        ])->assertOk()->assertJsonPath('message', 'Password changed. You can now sign in.');
+
+        $this->assertTrue(Hash::check('NewLongPassword!456', $user->fresh()->password));
+        $this->assertDatabaseMissing('password_reset_tokens', ['email' => $user->email]);
+        $this->assertDatabaseMissing('otp_codes', [
+            'user_id' => $user->id,
+            'purpose' => 'password_reset',
+        ]);
+        $this->postJson('/api/v1/login', [
+            'email' => $user->email,
+            'password' => 'OldLongPassword!123',
+        ])->assertUnprocessable();
+        $this->postJson('/api/v1/login', [
+            'email' => $user->email,
+            'password' => 'NewLongPassword!456',
+        ])->assertOk();
+    }
+
+    public function test_password_reset_otp_and_reset_token_expire(): void
+    {
+        $this->withoutMiddleware(ThrottleRequests::class);
+        Mail::fake();
+        $user = User::create([
+            'first_name' => 'TMC',
+            'last_name' => 'Member',
+            'tmc_id_no' => 'TMC-RESET-2',
+            'email' => 'reset-member2@gmail.com',
+            'password' => 'OldLongPassword!123',
+            'role' => 'user',
+            'status' => 'active',
+            'email_verified_at' => now(),
+        ]);
+
+        $this->postJson('/api/v1/forgot-password', ['email' => $user->email])->assertOk();
+        $otp = OtpCode::where('user_id', $user->id)->where('purpose', 'password_reset')->firstOrFail();
+        $otp->update(['expires_at' => now()->subSecond()]);
+        $this->postJson('/api/v1/forgot-password/verify-otp', [
+            'email' => $user->email,
+            'code' => Mail::sent(OneTimeCode::class)->first()->code,
+        ])->assertUnprocessable();
+
+        $this->postJson('/api/v1/forgot-password', ['email' => $user->email])->assertOk();
+        $freshCode = Mail::sent(OneTimeCode::class)->last()->code;
+        $resetToken = $this->postJson('/api/v1/forgot-password/verify-otp', [
+            'email' => $user->email,
+            'code' => $freshCode,
+        ])->assertOk()->json('reset_token');
+
+        $this->travel(11)->minutes();
+        $this->postJson('/api/v1/forgot-password/reset', [
+            'email' => $user->email,
+            'reset_token' => $resetToken,
+            'password' => 'NewLongPassword!456',
+            'password_confirmation' => 'NewLongPassword!456',
+        ])->assertUnprocessable();
     }
 
     public function test_incorrect_security_answer_consumes_the_challenge_and_prompts_refresh(): void

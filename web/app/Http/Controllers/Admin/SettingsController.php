@@ -5,7 +5,6 @@ namespace App\Http\Controllers\Admin;
 use App\Http\Controllers\Controller;
 use App\Models\Category;
 use App\Models\Location;
-use App\Models\MeetupLocation;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -20,7 +19,6 @@ class SettingsController extends Controller
             'settings' => DB::table('settings')->pluck('value', 'key'),
             'categories' => Category::orderBy('name')->get(),
             'locations' => Location::orderBy('name')->get(),
-            'meetupLocations' => MeetupLocation::orderBy('name')->get(),
         ]);
     }
 
@@ -32,7 +30,6 @@ class SettingsController extends Controller
             'claim_attempts' => ['required', 'integer', 'min:1', 'max:10'],
             'report_threshold' => ['required', 'integer', 'min:1', 'max:100'],
             'archive_days' => ['required', 'integer', 'min:1', 'max:60'],
-            'handover_code_minutes' => ['required', 'integer', 'min:5', 'max:240'],
             'comments_per_day' => ['required', 'integer', 'min:1', 'max:200'],
             'reports_per_day' => ['required', 'integer', 'min:1', 'max:50'],
             'blocked_words' => ['nullable', 'string', 'max:5000'],
@@ -71,27 +68,6 @@ class SettingsController extends Controller
         $this->audit($request, $action, $record->name);
 
         return back()->with('status', 'Campus option status updated.');
-    }
-
-    public function createMeetup(Request $request): RedirectResponse
-    {
-        $data = $request->validate([
-            'name' => ['required', 'string', 'max:120', 'unique:meetup_locations,name'],
-            'description' => ['nullable', 'string', 'max:1000'],
-            'operating_hours' => ['nullable', 'string', 'max:200'],
-        ]);
-        MeetupLocation::create($data + ['is_active' => true]);
-        $this->audit($request, 'meetup_location_created', $data['name']);
-
-        return back()->with('status', 'Meet-up location added.');
-    }
-
-    public function setMeetupStatus(Request $request, MeetupLocation $location): RedirectResponse
-    {
-        $location->update(['is_active' => ! $location->is_active]);
-        $this->audit($request, 'meetup_location_status_updated', $location->name);
-
-        return back()->with('status', 'Meet-up location status updated.');
     }
 
     private function saveSettings(Request $request, array $settings): void

@@ -2,12 +2,13 @@
 
 return [
     'default' => env('MAIL_MAILER', 'log'),
+    'otp_failure_fallback' => env('MAIL_OTP_FAILURE_FALLBACK', false),
     'mailers' => [
         'log' => ['transport' => 'log', 'channel' => env('MAIL_LOG_CHANNEL')],
         'array' => ['transport' => 'array'],
         'smtp' => [
             'transport' => 'smtp',
-            'scheme' => env('MAIL_SCHEME'),
+            'scheme' => env('MAIL_SCHEME') === 'tls' ? 'smtp' : env('MAIL_SCHEME'),
             'url' => env('MAIL_URL'),
             'host' => env('MAIL_HOST', '127.0.0.1'),
             'port' => env('MAIL_PORT', 2525),

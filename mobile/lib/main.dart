@@ -21,17 +21,47 @@ class CampusLfApp extends StatefulWidget {
 
 class _CampusLfAppState extends State<CampusLfApp> {
   final _tokens = const SecureTokenStore();
-  late final _api = ApiClient(tokenStore: _tokens, onUnauthorized: _handleUnauthorized);
+  late final _api = ApiClient(
+    tokenStore: _tokens,
+    onUnauthorized: _handleUnauthorized,
+  );
   late final _auth = AuthService(_api, _tokens);
   late final Future<String?> _savedToken = _auth.readToken();
   String? _firstName;
   bool _signedIn = false;
+  bool _forceSignedOut = false;
+  ThemeMode _themeMode = ThemeMode.light;
+
+  void _toggleTheme() {
+    setState(() {
+      _themeMode = _themeMode == ThemeMode.light
+          ? ThemeMode.dark
+          : ThemeMode.light;
+    });
+  }
 
   void _handleUnauthorized() {
     if (!mounted) return;
     setState(() {
       _signedIn = false;
       _firstName = null;
+      _forceSignedOut = true;
+    });
+  }
+
+  void _handleSignedOut() {
+    setState(() {
+      _signedIn = false;
+      _firstName = null;
+      _forceSignedOut = true;
+    });
+  }
+
+  void _handleSignedIn(String name) {
+    setState(() {
+      _firstName = name;
+      _signedIn = true;
+      _forceSignedOut = false;
     });
   }
 
@@ -40,26 +70,35 @@ class _CampusLfAppState extends State<CampusLfApp> {
     return MaterialApp(
       title: 'TMC CampusLF',
       theme: CampusTheme.build(),
+      darkTheme: CampusTheme.build(dark: true),
+      themeMode: _themeMode,
       debugShowCheckedModeBanner: false,
       home: _signedIn
           ? CampusHomeScreen(
               api: _api,
               auth: _auth,
               firstName: _firstName ?? 'TMC member',
-              onSignedOut: () => setState(() {
-                _signedIn = false;
-                _firstName = null;
-              }),
+              isDarkMode: _themeMode == ThemeMode.dark,
+              onToggleTheme: _toggleTheme,
+              onSignedOut: _handleSignedOut,
             )
+          : _forceSignedOut
+          ? AuthScreen(api: _api, auth: _auth, onSignedIn: _handleSignedIn)
           : FutureBuilder<String?>(
               future: _savedToken,
               builder: (context, snapshot) {
                 if (snapshot.connectionState != ConnectionState.done) {
-                  return const Scaffold(body: Center(child: CircularProgressIndicator()));
+                  return const Scaffold(
+                    body: Center(child: CircularProgressIndicator()),
+                  );
                 }
                 if (snapshot.hasError) {
                   return const Scaffold(
-                    body: Center(child: Text('Secure storage is unavailable on this device.')),
+                    body: Center(
+                      child: Text(
+                        'Secure storage is unavailable on this device.',
+                      ),
+                    ),
                   );
                 }
                 if (snapshot.data != null) {
@@ -68,19 +107,15 @@ class _CampusLfAppState extends State<CampusLfApp> {
                     api: _api,
                     auth: _auth,
                     firstName: _firstName ?? 'TMC member',
-                    onSignedOut: () => setState(() {
-                      _signedIn = false;
-                      _firstName = null;
-                    }),
+                    isDarkMode: _themeMode == ThemeMode.dark,
+                    onToggleTheme: _toggleTheme,
+                    onSignedOut: _handleSignedOut,
                   );
                 }
                 return AuthScreen(
                   api: _api,
                   auth: _auth,
-                  onSignedIn: (name) => setState(() {
-                    _firstName = name;
-                    _signedIn = true;
-                  }),
+                  onSignedIn: _handleSignedIn,
                 );
               },
             ),

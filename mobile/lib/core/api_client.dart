@@ -4,8 +4,11 @@ import 'config.dart';
 import 'secure_token_store.dart';
 
 class ApiClient {
-  ApiClient({SecureTokenStore? tokenStore, this._onUnauthorized})
-      : _tokenStore = tokenStore ?? const SecureTokenStore() {
+  ApiClient({
+    SecureTokenStore? tokenStore,
+    this.readToken,
+    this._onUnauthorized,
+  }) : _tokenStore = tokenStore ?? const SecureTokenStore() {
     dio = Dio(
       BaseOptions(
         baseUrl: AppConfig.apiBaseUrl,
@@ -17,7 +20,7 @@ class ApiClient {
     dio.interceptors.add(
       InterceptorsWrapper(
         onRequest: (options, handler) async {
-          final token = await _tokenStore.read();
+          final token = await (readToken?.call() ?? _tokenStore.read());
           if (token != null && token.isNotEmpty) {
             options.headers['Authorization'] = 'Bearer $token';
           }
@@ -35,20 +38,21 @@ class ApiClient {
   }
 
   final SecureTokenStore _tokenStore;
+  final Future<String?> Function()? readToken;
   final void Function()? _onUnauthorized;
   late final Dio dio;
 
   String errorMessage(Object error) {
     if (error is DioException) {
       final response = error.response?.data;
-      if (response is Map<String, dynamic> && response['message'] is String) {
-        return response['message'] as String;
-      }
       if (response is Map<String, dynamic> && response['errors'] is Map) {
         final errors = response['errors'] as Map;
         for (final value in errors.values) {
           if (value is List && value.isNotEmpty) return value.first.toString();
         }
+      }
+      if (response is Map<String, dynamic> && response['message'] is String) {
+        return response['message'] as String;
       }
       if (error.response == null) {
         return 'Could not connect to TMC CampusLF. Check your connection and try again.';

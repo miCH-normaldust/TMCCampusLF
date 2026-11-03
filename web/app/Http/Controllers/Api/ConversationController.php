@@ -6,13 +6,12 @@ use App\Http\Controllers\Controller;
 use App\Models\Conversation;
 use App\Models\Handover;
 use App\Models\LostSighting;
-use App\Models\MeetupLocation;
 use App\Models\User;
 use App\Services\TextMasker;
+use App\Support\PublicMediaUrl;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Str;
 
 class ConversationController extends Controller
@@ -21,30 +20,37 @@ class ConversationController extends Controller
     {
         $conversations = Conversation::with([
             'claimRequest.post:id,item_name,user_id',
-            'claimRequest.post.author:id,first_name',
-            'claimRequest.claimant:id,first_name',
+            'claimRequest.post.author:id,first_name,last_name,profile_picture_path',
+            'claimRequest.claimant:id,first_name,last_name,profile_picture_path',
         ])
             ->whereNull('closed_at')
             ->whereHas('claimRequest', function ($query) use ($request): void {
-                $query->where('status', 'approved')->where(function ($participants) use ($request): void {
-                    $participants->where('claimant_id', $request->user()->id)
-                        ->orWhereHas('post', fn ($post) => $post->where('user_id', $request->user()->id));
-                });
+                $query->where('status', 'approved')
+                    ->where('author_decision', 'approved')
+                    ->where(function ($participants) use ($request): void {
+                        $participants->where('claimant_id', $request->user()->id)
+                            ->orWhereHas('post', fn ($post) => $post->where('user_id', $request->user()->id));
+                    });
             })
             ->latest()
             ->get()
             ->map(function (Conversation $conversation) use ($request): array {
                 $claim = $conversation->claimRequest;
                 $author = $claim->post->author;
+                $otherUser = $request->user()->id === $author->id
+                    ? $claim->claimant
+                    : $author;
 
                 return [
                     'id' => $conversation->id,
                     'post_id' => $claim->post_id,
                     'item_name' => $claim->post->item_name,
-                    'other_first_name' => $request->user()->id === $author->id
-                        ? $claim->claimant->first_name
-                        : $author->first_name,
-                    'location_id' => $claim->location_id,
+                    'other_user_id' => $otherUser->id,
+                    'other_first_name' => $otherUser->first_name,
+                    'other_last_name' => $otherUser->last_name,
+                    'other_profile_picture_url' => $otherUser->profile_picture_path
+                        ? PublicMediaUrl::forPath($otherUser->profile_picture_path)
+                        : null,
                     'last_message_at' => $conversation->messages()->latest()->value('created_at'),
                 ];
             });
@@ -56,7 +62,7 @@ class ConversationController extends Controller
     {
         $this->authorizeParticipant($conversation, $request->user());
         $messages = $conversation->messages()
-            ->with('sender:id,first_name')
+            ->with('sender:id,first_name,last_name,profile_picture_path')
             ->oldest()
             ->paginate(50)
             ->through(fn ($message): array => [
@@ -64,6 +70,10 @@ class ConversationController extends Controller
                 'body' => $message->body,
                 'sender_id' => $message->sender_id,
                 'sender_first_name' => $message->sender->first_name,
+                'sender_last_name' => $message->sender->last_name,
+                'sender_profile_picture_url' => $message->sender->profile_picture_path
+                    ? PublicMediaUrl::forPath($message->sender->profile_picture_path)
+                    : null,
                 'created_at' => $message->created_at,
             ]);
 
@@ -94,17 +104,12 @@ class ConversationController extends Controller
             'body' => $message->body,
             'sender_id' => $request->user()->id,
             'sender_first_name' => $request->user()->first_name,
+            'sender_last_name' => $request->user()->last_name,
+            'sender_profile_picture_url' => $request->user()->profile_picture_path
+                ? PublicMediaUrl::forPath($request->user()->profile_picture_path)
+                : null,
             'created_at' => $message->created_at,
         ], 201);
-    }
-
-    public function locations(): JsonResponse
-    {
-        return response()->json([
-            'data' => MeetupLocation::where('is_active', true)->orderBy('name')->get([
-                'id', 'name', 'description', 'operating_hours',
-            ]),
-        ]);
     }
 
     public function handovers(Request $request): JsonResponse
@@ -116,11 +121,11 @@ class ConversationController extends Controller
             'claimRequest.conversation:id,claim_id',
             'sighting.post.author:id,first_name',
             'sighting.user:id,first_name',
-            'location:id,name',
         ])
             ->where(function ($query) use ($user): void {
                 $query->whereHas('claimRequest', function ($claim) use ($user): void {
                     $claim->where('status', 'approved')
+                        ->where('author_decision', 'approved')
                         ->where(function ($participants) use ($user): void {
                             $participants->where('claimant_id', $user->id)
                                 ->orWhereHas('post', fn ($post) => $post->where('user_id', $user->id));
@@ -152,11 +157,13 @@ class ConversationController extends Controller
                     'other_first_name' => ($isOwner ? $finder : $owner)?->first_name ?? 'TMC member',
                     'sighting_id' => $sighting?->id,
                     'conversation_id' => $claim?->conversation?->id,
-                    'location' => $handover->location?->name,
-                    'expires_at' => $handover->expires_at,
                     'owner_confirmed_at' => $handover->owner_confirmed_at,
                     'finder_confirmed_at' => $handover->finder_confirmed_at,
-                    'verified' => $handover->verified_by !== null,
+                    'my_confirmation_at' => $isOwner
+                        ? $handover->owner_confirmed_at
+                        : $handover->finder_confirmed_at,
+                    'completed' => $handover->owner_confirmed_at !== null
+                        && $handover->finder_confirmed_at !== null,
                 ];
             });
 
@@ -173,61 +180,15 @@ class ConversationController extends Controller
                 && in_array($request->user()->id, [$sighting->post->user_id, $sighting->user_id], true),
             404,
         );
-        abort_unless(in_array($sighting->post->status, ['approved_for_meetup', 'retrieved'], true), 409, 'This lost-item sighting is not approved for a handover.');
-
-        $handover = $sighting->handover;
-        abort_if($handover?->verified_by !== null, 409, 'This handover has already been verified.');
-        if ($handover && $handover->expires_at->isFuture()) {
-            return response()->json([
-                'id' => $handover->id,
-                'code' => $handover->code_encrypted,
-                'expires_at' => $handover->expires_at,
-                'location_id' => $handover->location_id,
-                'message' => 'Show this code to the other party at your selected TMC meet-up location.',
-            ]);
-        }
-
-        $data = $request->validate([
-            'location_id' => ['nullable', 'exists:meetup_locations,id'],
-        ]);
-        $locationId = $data['location_id'] ?? $handover?->location_id;
-        abort_unless($locationId, 422, 'Choose an active TMC meet-up location first.');
-        $location = MeetupLocation::whereKey($locationId)->where('is_active', true)->firstOrFail();
-        $code = (string) random_int(10000000, 99999999);
-        $validMinutes = (int) DB::table('settings')->where('key', 'handover_code_minutes')->value('value') ?: 30;
-        $lookup = hash_hmac('sha256', $code, (string) config('app.key'));
-        $handover = Handover::updateOrCreate(
-            ['sighting_id' => $sighting->id],
-            [
-                'claim_id' => null,
-                'code_hash' => Hash::make($code),
-                'code_encrypted' => $code,
-                'code_lookup' => $lookup,
-                'expires_at' => now()->addMinutes($validMinutes),
-                'owner_confirmed_at' => null,
-                'finder_confirmed_at' => null,
-                'verified_by' => null,
-                'location_id' => $location->id,
-            ],
-        );
+        abort_unless(in_array($sighting->post->status, ['handover_pending', 'retrieved'], true), 409, 'This lost-item evidence is not approved for a handover.');
+        $handover = Handover::firstOrCreate(['sighting_id' => $sighting->id]);
 
         return response()->json([
             'id' => $handover->id,
-            'code' => $code,
-            'expires_at' => $handover->expires_at,
-            'location_id' => $handover->location_id,
-            'message' => 'Show this code to the other party at your selected TMC meet-up location.',
-        ], 201);
-    }
-
-    public function chooseLocation(Request $request, Conversation $conversation): JsonResponse
-    {
-        $this->authorizeParticipant($conversation, $request->user());
-        $data = $request->validate(['location_id' => ['required', 'exists:meetup_locations,id']]);
-        $location = MeetupLocation::whereKey($data['location_id'])->where('is_active', true)->firstOrFail();
-        $conversation->claimRequest->update(['location_id' => $location->id]);
-
-        return response()->json(['message' => 'Meet-up location saved.', 'location' => $location]);
+            'owner_confirmed_at' => $handover->owner_confirmed_at,
+            'finder_confirmed_at' => $handover->finder_confirmed_at,
+            'message' => 'Handover is ready. Each participant can confirm the exchange in the app.',
+        ], $handover->wasRecentlyCreated ? 201 : 200);
     }
 
     public function createHandover(Request $request, Conversation $conversation): JsonResponse
@@ -235,42 +196,19 @@ class ConversationController extends Controller
         $this->authorizeParticipant($conversation, $request->user());
         abort_if($conversation->closed_at, 409, 'This conversation is closed.');
         $claim = $conversation->claimRequest;
-        abort_unless($claim->location_id && MeetupLocation::whereKey($claim->location_id)->where('is_active', true)->exists(), 422, 'Choose an active TMC meet-up location first.');
-
-        $handover = Handover::where('claim_id', $claim->id)->first();
-        if ($handover && $handover->expires_at->isFuture()) {
-            return response()->json([
-                'id' => $handover->id,
-                'code' => $handover->code_encrypted,
-                'expires_at' => $handover->expires_at,
-                'location_id' => $handover->location_id,
-            ]);
-        }
-
-        $code = (string) random_int(10000000, 99999999);
-        $validMinutes = (int) DB::table('settings')->where('key', 'handover_code_minutes')->value('value') ?: 30;
-        $lookup = hash_hmac('sha256', $code, (string) config('app.key'));
-        $handover = Handover::updateOrCreate(
-            ['claim_id' => $claim->id],
-            [
-                'code_hash' => Hash::make($code),
-                'code_encrypted' => $code,
-                'code_lookup' => $lookup,
-                'expires_at' => now()->addMinutes($validMinutes),
-                'owner_confirmed_at' => null,
-                'finder_confirmed_at' => null,
-                'verified_by' => null,
-                'location_id' => $claim->location_id,
-            ],
+        abort_unless(
+            $claim->status === 'approved' && $claim->author_decision === 'approved',
+            409,
+            'The administrator and item poster must both approve this claim before handover.',
         );
+        $handover = Handover::firstOrCreate(['claim_id' => $claim->id]);
 
         return response()->json([
             'id' => $handover->id,
-            'code' => $code,
-            'expires_at' => $handover->expires_at,
-            'location_id' => $handover->location_id,
-            'message' => 'Show this code to the other party at your selected TMC meet-up location.',
-        ], 201);
+            'owner_confirmed_at' => $handover->owner_confirmed_at,
+            'finder_confirmed_at' => $handover->finder_confirmed_at,
+            'message' => 'Handover is ready. Each participant can confirm the exchange in the app.',
+        ], $handover->wasRecentlyCreated ? 201 : 200);
     }
 
     public function confirmHandover(Request $request, Handover $handover): JsonResponse
@@ -281,6 +219,7 @@ class ConversationController extends Controller
         if ($claim) {
             $conversation = Conversation::where('claim_id', $claim->id)->firstOrFail();
             $this->authorizeParticipant($conversation, $request->user());
+            abort_unless($claim->author_decision === 'approved', 409, 'The item poster must agree before handover can proceed.');
         } else {
             abort_unless(
                 $sighting
@@ -291,17 +230,17 @@ class ConversationController extends Controller
                 404,
             );
         }
-        $data = $request->validate(['code' => ['required', 'digits:8']]);
-        abort_if($handover->expires_at->isPast(), 409, 'This handover code has expired.');
-        abort_unless(Hash::check($data['code'], $handover->code_hash), 422, 'The handover code is incorrect.');
-
         DB::transaction(function () use ($request, $handover, $claim, $sighting, $conversation): void {
             $locked = Handover::whereKey($handover->id)->lockForUpdate()->firstOrFail();
             $ownerId = $claim?->claimant_id ?? $sighting?->post?->user_id;
             if ($request->user()->id === $ownerId) {
-                $locked->update(['owner_confirmed_at' => now()]);
+                if ($locked->owner_confirmed_at === null) {
+                    $locked->update(['owner_confirmed_at' => now()]);
+                }
             } else {
-                $locked->update(['finder_confirmed_at' => now()]);
+                if ($locked->finder_confirmed_at === null) {
+                    $locked->update(['finder_confirmed_at' => now()]);
+                }
             }
             $locked = $locked->fresh();
             if ($locked->owner_confirmed_at && $locked->finder_confirmed_at) {
@@ -311,7 +250,9 @@ class ConversationController extends Controller
         });
 
         return response()->json([
-            'message' => 'Your confirmation was recorded.',
+            'message' => $handover->fresh()->owner_confirmed_at !== null && $handover->fresh()->finder_confirmed_at !== null
+                ? 'Both participants confirmed. The item is marked as retrieved.'
+                : 'Your confirmation was recorded. Waiting for the other participant.',
             'retrieved' => $conversation
                 ? $conversation->fresh()->closed_at !== null
                 : $handover->fresh()->owner_confirmed_at !== null && $handover->fresh()->finder_confirmed_at !== null,
@@ -324,6 +265,7 @@ class ConversationController extends Controller
         $claim = $conversation->claimRequest;
         abort_unless(
             $claim->status === 'approved'
+                && $claim->author_decision === 'approved'
                 && in_array($user->id, [$claim->claimant_id, $claim->post->user_id], true),
             404,
         );

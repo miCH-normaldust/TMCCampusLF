@@ -14,6 +14,7 @@ use App\Models\User;
 use App\Services\ImageReencoder;
 use App\Services\BlockedWordFilter;
 use App\Services\TextMasker;
+use App\Support\PublicMediaUrl;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -27,16 +28,27 @@ class PostController extends Controller
     {
         $filters = $request->validate([
             'type' => ['sometimes', 'in:lost,found'],
+            'status' => ['sometimes', 'in:active,claim_pending,handover_pending'],
             'category_id' => ['sometimes', 'integer', 'exists:categories,id'],
             'location_id' => ['sometimes', 'integer', 'exists:locations,id'],
             'color' => ['sometimes', 'string', 'max:50'],
             'from' => ['sometimes', 'date'],
             'to' => ['sometimes', 'date'],
             'search' => ['sometimes', 'string', 'max:150'],
+            'sort' => ['sometimes', 'in:latest,oldest'],
         ]);
         $posts = Post::query()
-            ->with(['author:id,first_name', 'category:id,name', 'location:id,name', 'images', 'verificationQuestions'])
-            ->whereIn('status', ['active', 'claim_pending', 'approved_for_meetup'])
+            ->with([
+                'author:id,first_name,last_name,profile_picture_path',
+                'category:id,name',
+                'location:id,name',
+                'images',
+                'verificationQuestions',
+                'reactions' => fn ($query) => $query->where('user_id', $request->user()?->id),
+            ])
+            ->withCount(['comments', 'reactions'])
+            ->whereIn('status', ['active', 'claim_pending', 'handover_pending'])
+            ->when(isset($filters['status']), fn ($query) => $query->where('status', $filters['status']))
             ->when(isset($filters['type']), fn ($query) => $query->where('type', $filters['type']))
             ->when(isset($filters['category_id']), fn ($query) => $query->where('category_id', $filters['category_id']))
             ->when(isset($filters['location_id']), fn ($query) => $query->where('location_id', $filters['location_id']))
@@ -47,17 +59,100 @@ class PostController extends Controller
                 $term = '%'.$filters['search'].'%';
                 $query->where(fn ($builder) => $builder
                     ->where('item_name', 'like', $term)
-                    ->orWhere('description', 'like', $term));
+                    ->orWhere('description', 'like', $term)
+                    ->orWhereHas('author', fn ($author) => $author
+                        ->where('first_name', 'like', $term)
+                        ->orWhere('last_name', 'like', $term)));
             })
-            ->latest()
+            ->orderBy('created_at', ($filters['sort'] ?? 'latest') === 'oldest' ? 'asc' : 'desc')
             ->paginate(15);
 
         return PostResource::collection($posts);
     }
 
+    public function mine(Request $request)
+    {
+        $filters = $request->validate([
+            'status' => ['sometimes', 'in:active,archived,retrieved'],
+            'category_id' => ['sometimes', 'integer', 'exists:categories,id'],
+            'search' => ['sometimes', 'string', 'max:150'],
+            'sort' => ['sometimes', 'in:latest,oldest'],
+        ]);
+        $posts = Post::query()
+            ->with([
+                'author:id,first_name,last_name,profile_picture_path',
+                'category:id,name',
+                'location:id,name',
+                'images',
+                'verificationQuestions',
+                'latestRetrievalRequest',
+                'reactions' => fn ($query) => $query->where('user_id', $request->user()->id),
+            ])
+            ->withCount(['comments', 'reactions'])
+            ->where('user_id', $request->user()->id)
+            ->whereIn('status', ['active', 'claim_pending', 'handover_pending', 'archived', 'retrieved'])
+            ->when(isset($filters['status']), function ($query) use ($filters): void {
+                if ($filters['status'] === 'active') {
+                    $query->whereIn('status', ['active', 'claim_pending', 'handover_pending']);
+                } else {
+                    $query->where('status', $filters['status']);
+                }
+            })
+            ->when(isset($filters['category_id']), fn ($query) => $query->where('category_id', $filters['category_id']))
+            ->when(isset($filters['search']), function ($query) use ($filters): void {
+                $term = '%'.$filters['search'].'%';
+                $query->where(fn ($builder) => $builder
+                    ->where('item_name', 'like', $term)
+                    ->orWhere('description', 'like', $term));
+            })
+            ->orderBy('created_at', ($filters['sort'] ?? 'latest') === 'oldest' ? 'asc' : 'desc')
+            ->paginate(15);
+
+        return PostResource::collection($posts);
+    }
+
+    public function editData(Request $request, Post $post): JsonResponse
+    {
+        abort_unless($post->user_id === $request->user()->id, 404);
+        abort_unless($post->status === 'active', 409, 'Only active posts can be edited.');
+        abort_if(
+            $post->claimRequests()->whereIn('status', ['pending', 'approved'])->exists()
+                || $post->sightings()->where('answer', 'yes')->whereIn('author_decision', ['pending', 'approved'])->exists()
+                || $post->retrievalRequests()->where('status', 'pending')->exists(),
+            409,
+            'This post has a pending claim, evidence review, or retrieval approval and its details are locked.',
+        );
+
+        $post->load(['category:id,name', 'location:id,name', 'images', 'verificationQuestions']);
+
+        return response()->json([
+            'id' => $post->id,
+            'type' => $post->type,
+            'item_name' => $post->item_name,
+            'description' => $post->description,
+            'category_id' => $post->category_id,
+            'color' => $post->color,
+            'location_id' => $post->location_id,
+            'event_date' => $post->event_date?->toDateString(),
+            'custody' => $post->custody,
+            'images' => $post->images->map(fn ($image): array => [
+                'url' => PublicMediaUrl::forPath($image->path),
+                'alt_text' => $image->alt_text,
+            ]),
+            'questions' => $post->verificationQuestions->map(fn ($question): array => [
+                'question' => $question->question,
+                'answer' => $question->answer,
+            ]),
+        ]);
+    }
+
     public function show(Post $post): PostResource
     {
-        abort_unless(in_array($post->status, ['active', 'claim_pending', 'approved_for_meetup'], true), 404);
+        abort_unless(
+            in_array($post->status, ['active', 'claim_pending', 'handover_pending'], true)
+                || (request()->user()?->id === $post->user_id),
+            404,
+        );
 
         return new PostResource($post->load([
             'author:id,first_name',
@@ -81,7 +176,7 @@ class PostController extends Controller
         $eventDate = Carbon::parse($data['event_date']);
         $matches = Post::with(['author:id,first_name', 'category:id,name', 'location:id,name', 'images', 'verificationQuestions'])
             ->where('type', $data['type'])
-            ->whereIn('status', ['active', 'claim_pending', 'approved_for_meetup'])
+            ->whereIn('status', ['active', 'claim_pending', 'handover_pending'])
             ->where('category_id', $data['category_id'])
             ->where('location_id', $data['location_id'])
             ->where('color', 'like', '%'.$data['color'].'%')
@@ -101,7 +196,7 @@ class PostController extends Controller
         return PostResource::collection(
             Post::with(['author:id,first_name', 'category:id,name', 'location:id,name', 'images'])
                 ->whereIn('id', $post->matches()->select('matched_post_id'))
-                ->whereIn('status', ['active', 'claim_pending', 'approved_for_meetup'])
+                ->whereIn('status', ['active', 'claim_pending', 'handover_pending'])
                 ->orderByDesc(
                     Post::select('score')
                         ->from('post_matches')
@@ -111,6 +206,29 @@ class PostController extends Controller
                 )
                 ->paginate(15),
         );
+    }
+
+    protected function normalizePhotos(Request $request): array
+    {
+        $normalized = [];
+        foreach ($request->file('photos', []) as $index => $photo) {
+            if (is_array($photo)) {
+                $file = $photo['file'] ?? null;
+                $altText = $photo['alt_text'] ?? $request->input('photos.'.$index.'.alt_text');
+            } else {
+                $file = $photo;
+                $altText = $request->input('photos.'.$index.'.alt_text');
+            }
+
+            if ($file instanceof \Illuminate\Http\UploadedFile) {
+                $normalized[] = [
+                    'file' => $file,
+                    'alt_text' => $altText ?? '',
+                ];
+            }
+        }
+
+        return $normalized;
     }
 
     public function store(StorePostRequest $request, ImageReencoder $images, TextMasker $masker, BlockedWordFilter $blockedWords): JsonResponse
@@ -132,14 +250,15 @@ class PostController extends Controller
             'type', 'item_name', 'description', 'category_id', 'color',
             'location_id', 'event_date', 'custody', 'expires_at',
         ]));
-        $post = DB::transaction(function () use ($data, $postData, $user, $images, $request, $masker): Post {
+        $photos = $this->normalizePhotos($request);
+        $post = DB::transaction(function () use ($data, $postData, $user, $images, $request, $masker, $photos): Post {
             $post = $user->posts()->create($postData);
 
-            foreach ($request->file('photos', []) as $photo) {
+            foreach ($photos as $photo) {
                 $path = $images->store($photo['file']);
                 $post->images()->create([
                     'path' => $path,
-                    'alt_text' => $masker->mask($photo['alt_text']),
+                    'alt_text' => $masker->mask((string) ($photo['alt_text'] ?? '')),
                 ]);
             }
 
@@ -210,13 +329,15 @@ class PostController extends Controller
         abort_unless($post->status === 'active', 409, 'Only active posts can be edited.');
         abort_if(
             $post->claimRequests()->whereIn('status', ['pending', 'approved'])->exists()
-                || $post->sightings()->where('answer', 'yes')->whereIn('author_decision', ['pending', 'approved'])->exists(),
+                || $post->sightings()->where('answer', 'yes')->whereIn('author_decision', ['pending', 'approved'])->exists()
+                || $post->retrievalRequests()->where('status', 'pending')->exists(),
             409,
-            'This post has a pending claim or evidence review and its details are locked.',
+            'This post has a pending claim, evidence review, or retrieval approval and its details are locked.',
         );
 
         $data = $request->validated();
-        abort_if($post->images()->count() + count($request->file('photos', [])) > 5, 422, 'A post can include at most five photos.');
+        $photos = $this->normalizePhotos($request);
+        abort_if($post->images()->count() + count($photos) > 5, 422, 'A post can include at most five photos.');
         abort_unless(Category::whereKey($data['category_id'])->where('is_active', true)->exists(), 422, 'Category is unavailable.');
         abort_unless(Location::whereKey($data['location_id'])->where('is_active', true)->exists(), 422, 'Location is unavailable.');
         $postData = array_intersect_key($data, array_flip([
@@ -226,12 +347,12 @@ class PostController extends Controller
         $postData['item_name'] = $masker->mask($postData['item_name']);
         $postData['description'] = $masker->mask($postData['description']);
 
-        DB::transaction(function () use ($data, $postData, $post, $request, $images, $masker): void {
+        DB::transaction(function () use ($data, $postData, $post, $request, $images, $masker, $photos): void {
             $post->update($postData);
-            foreach ($request->file('photos', []) as $photo) {
+            foreach ($photos as $photo) {
                 $post->images()->create([
                     'path' => $images->store($photo['file']),
-                    'alt_text' => $masker->mask($photo['alt_text']),
+                    'alt_text' => $masker->mask((string) ($photo['alt_text'] ?? '')),
                 ]);
             }
             if ($post->type === 'found') {

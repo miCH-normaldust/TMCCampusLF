@@ -8,7 +8,16 @@ use Illuminate\Database\Eloquent\Relations\HasOne;
 
 class ClaimRequest extends Model
 {
-    protected $fillable = ['post_id', 'claimant_id', 'answers', 'attempt_no', 'status', 'reviewed_by', 'reviewed_at'];
+    protected $fillable = [
+        'post_id',
+        'claimant_id',
+        'answers',
+        'attempt_no',
+        'status',
+        'author_decision',
+        'reviewed_by',
+        'reviewed_at',
+    ];
 
     protected function casts(): array
     {

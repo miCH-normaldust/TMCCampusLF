@@ -14,6 +14,8 @@ void main() {
       'event_date': '2026-10-18',
       'status': 'active',
       'author_first_name': 'Mika',
+      'is_mine': true,
+      'retrieval_request_status': 'pending',
       'verification_questions': [
         {'id': 1, 'question': 'What sticker is on the bottle?'},
       ],
@@ -22,6 +24,8 @@ void main() {
     expect(post.id, 7);
     expect(post.type, 'found');
     expect(post.questions, ['What sticker is on the bottle?']);
+    expect(post.isMine, isTrue);
+    expect(post.retrievalRequestStatus, 'pending');
     expect(post.toString(), isNot(contains('answer')));
   });
 }

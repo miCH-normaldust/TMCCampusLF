@@ -38,6 +38,7 @@ dependencies:
   flutter_secure_storage: ^11.2.0
   image_picker: ^1.2.4
   qr_flutter: ^4.1.0
+  share_plus: ^13.3.1
 
 dev_dependencies:
   flutter_test:
@@ -60,6 +61,9 @@ flutter:
   # included with your application, so that you can use the icons in
   # the material Icons class.
   uses-material-design: true
+
+  assets:
+    - assets/tmc_logo.png
 
   # To add assets to your application, add an assets section, like this:
   # assets:

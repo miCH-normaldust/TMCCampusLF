@@ -4,10 +4,12 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\ClaimRequest;
+use App\Models\Handover;
 use App\Models\Post;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Str;
 
 class ClaimController extends Controller
 {
@@ -52,5 +54,93 @@ class ClaimController extends Controller
             'claim_id' => $claim->id,
             'attempt_no' => $claim->attempt_no,
         ], 201);
+    }
+
+    public function awaitingPostAuthor(Request $request): JsonResponse
+    {
+        $claims = ClaimRequest::with([
+            'post:id,item_name,type,category_id',
+            'post.category:id,name',
+            'claimant:id,first_name,last_name',
+        ])
+            ->where('status', 'approved')
+            ->where('author_decision', 'pending')
+            ->whereHas('post', fn ($post) => $post->where('user_id', $request->user()->id))
+            ->latest()
+            ->paginate(20)
+            ->through(fn (ClaimRequest $claim): array => [
+                'id' => $claim->id,
+                'item_name' => $claim->post->item_name,
+                'category' => $claim->post->category?->name ?? 'Other',
+                'claimant_first_name' => $claim->claimant->first_name,
+                'claimant_last_name' => $claim->claimant->last_name,
+                'attempt_no' => $claim->attempt_no,
+                'admin_reviewed_at' => $claim->reviewed_at,
+            ]);
+
+        return response()->json($claims);
+    }
+
+    public function decideForPostAuthor(Request $request, ClaimRequest $claim): JsonResponse
+    {
+        $claim->load(['post.author', 'claimant']);
+        abort_unless($claim->post->user_id === $request->user()->id, 404);
+        abort_unless(
+            $claim->status === 'approved' && $claim->author_decision === 'pending',
+            409,
+            'This claim has already received the post author’s decision.',
+        );
+
+        $decision = $request->validate([
+            'decision' => ['required', 'in:approve,reject'],
+        ])['decision'];
+
+        DB::transaction(function () use ($claim, $decision): void {
+            $claim->update(['author_decision' => $decision === 'approve' ? 'approved' : 'rejected']);
+
+            if ($decision === 'approve') {
+                Handover::firstOrCreate(['claim_id' => $claim->id]);
+                $claim->claimant->notifications()->create([
+                    'id' => (string) Str::uuid(),
+                    'type' => 'claim_owner_approved',
+                    'data' => [
+                        'title' => 'The item poster agreed',
+                        'body' => 'The item poster agreed to your approved claim. Open Inbox > Handovers to confirm the exchange.',
+                        'claim_id' => $claim->id,
+                    ],
+                ]);
+
+                return;
+            }
+
+            if (! $claim->post->claimRequests()
+                ->where(function ($query): void {
+                    $query->where('status', 'pending')
+                        ->orWhere(function ($approved): void {
+                            $approved->where('status', 'approved')
+                                ->whereIn('author_decision', ['pending', 'approved']);
+                        });
+                })
+                ->exists()) {
+                $claim->post->update(['status' => 'active']);
+            }
+
+            $claim->claimant->notifications()->create([
+                'id' => (string) Str::uuid(),
+                'type' => 'claim_owner_rejected',
+                'data' => [
+                    'title' => 'The item poster declined the handover',
+                    'body' => 'The item poster did not agree to proceed with this claim.',
+                    'claim_id' => $claim->id,
+                ],
+            ]);
+        });
+
+        return response()->json([
+            'message' => $decision === 'approve'
+                ? 'You agreed to the claim. Both participants can now confirm the handover.'
+                : 'Your decision was recorded.',
+            'decision' => $decision,
+        ]);
     }
 }
