@@ -51,6 +51,46 @@ class UserController extends Controller
             throw ValidationException::withMessages(['email' => 'Use a Gmail address ending in @gmail.com.']);
         }
 
+        $masterlist = DB::table('tmc_masterlist')
+            ->where('tmc_id_no', $data['tmc_id_no'])
+            ->first();
+
+        if (! $masterlist) {
+            throw ValidationException::withMessages([
+                'tmc_id_no' => 'This TMC ID is not in the official masterlist.',
+            ]);
+        }
+
+        $masterlistName = $this->normalizeMasterlistValue($masterlist->full_name);
+        $submittedName = $this->normalizeMasterlistValue($data['first_name'].' '.$data['last_name']);
+        if ($masterlistName !== $submittedName) {
+            throw ValidationException::withMessages([
+                'first_name' => 'The name does not match the official masterlist.',
+            ]);
+        }
+        if (strtolower($masterlist->email) !== strtolower($data['email'])) {
+            throw ValidationException::withMessages([
+                'email' => 'The email does not match the official masterlist.',
+            ]);
+        }
+        if (strtolower($masterlist->user_type) !== $data['user_type']) {
+            throw ValidationException::withMessages([
+                'user_type' => 'The user type does not match the official masterlist.',
+            ]);
+        }
+        if ($data['user_type'] === 'other'
+            && $this->normalizeMasterlistValue($masterlist->user_type_other ?? '')
+                !== $this->normalizeMasterlistValue($data['user_type_other'] ?? '')) {
+            throw ValidationException::withMessages([
+                'user_type_other' => 'The specified user type does not match the official masterlist.',
+            ]);
+        }
+        if (strtoupper($masterlist->department) !== $data['department']) {
+            throw ValidationException::withMessages([
+                'department' => 'The department does not match the official masterlist.',
+            ]);
+        }
+
         $user = User::create([
             ...$data,
             'email' => strtolower($data['email']),
@@ -61,6 +101,11 @@ class UserController extends Controller
         $this->audit($request, $user, 'user_created', 'Created by administrator.');
 
         return redirect()->route('admin.users.index')->with('status', 'User account created.');
+    }
+
+    private function normalizeMasterlistValue(string $value): string
+    {
+        return mb_strtolower(preg_replace('/\s+/', ' ', trim($value)) ?? '');
     }
 
     public function setStatus(Request $request, User $user): RedirectResponse

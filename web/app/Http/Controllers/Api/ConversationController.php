@@ -22,47 +22,141 @@ class ConversationController extends Controller
             'claimRequest.post:id,item_name,user_id',
             'claimRequest.post.author:id,first_name,last_name,profile_picture_path',
             'claimRequest.claimant:id,first_name,last_name,profile_picture_path',
+            'sighting.post:id,item_name,user_id',
+            'sighting.post.author:id,first_name,last_name,profile_picture_path',
+            'sighting.user:id,first_name,last_name,profile_picture_path',
+            'supportUser:id,first_name,last_name',
+            'supportSighting:id,post_id',
+            'supportSighting.post:id,item_name',
+            'userOne:id,first_name,last_name,profile_picture_path',
+            'userTwo:id,first_name,last_name,profile_picture_path',
         ])
             ->whereNull('closed_at')
-            ->whereHas('claimRequest', function ($query) use ($request): void {
-                $query->where('status', 'approved')
-                    ->where('author_decision', 'approved')
-                    ->where(function ($participants) use ($request): void {
-                        $participants->where('claimant_id', $request->user()->id)
-                            ->orWhereHas('post', fn ($post) => $post->where('user_id', $request->user()->id));
-                    });
+            ->where('status', '!=', 'declined')
+            ->where(function ($query) use ($request): void {
+                $query->whereHas('claimRequest', function ($claim) use ($request): void {
+                    $claim->where('status', 'approved')
+                        ->where('author_decision', 'approved')
+                        ->where(function ($participants) use ($request): void {
+                            $participants->where('claimant_id', $request->user()->id)
+                                ->orWhereHas('post', fn ($post) => $post->where('user_id', $request->user()->id));
+                        });
+                })->orWhereHas('sighting', function ($sighting) use ($request): void {
+                    $sighting->where('answer', 'yes')
+                        ->where('author_decision', 'approved')
+                        ->where('admin_decision', 'approved')
+                        ->where(function ($participants) use ($request): void {
+                            $participants->where('user_id', $request->user()->id)
+                                ->orWhereHas('post', fn ($post) => $post->where('user_id', $request->user()->id));
+                        });
+                })->orWhere('support_user_id', $request->user()->id)
+                ->orWhere(function ($direct) use ($request): void {
+                    $direct->whereNotNull('user_one_id')
+                        ->where(function ($p) use ($request): void {
+                            $p->where('user_one_id', $request->user()->id)
+                              ->orWhere('user_two_id', $request->user()->id);
+                        });
+                });
             })
-            ->latest()
+            ->latest('updated_at')
             ->get()
-            ->map(function (Conversation $conversation) use ($request): array {
-                $claim = $conversation->claimRequest;
-                $author = $claim->post->author;
-                $otherUser = $request->user()->id === $author->id
-                    ? $claim->claimant
-                    : $author;
-
-                return [
-                    'id' => $conversation->id,
-                    'post_id' => $claim->post_id,
-                    'item_name' => $claim->post->item_name,
-                    'other_user_id' => $otherUser->id,
-                    'other_first_name' => $otherUser->first_name,
-                    'other_last_name' => $otherUser->last_name,
-                    'other_profile_picture_url' => $otherUser->profile_picture_path
-                        ? PublicMediaUrl::forPath($otherUser->profile_picture_path)
-                        : null,
-                    'last_message_at' => $conversation->messages()->latest()->value('created_at'),
-                ];
-            });
+            ->map(fn (Conversation $conversation): array => $this->formatConversationPayload($conversation, $request->user()));
 
         return response()->json(['data' => $conversations]);
+    }
+
+    public function startDirectChat(Request $request): JsonResponse
+    {
+        $data = $request->validate([
+            'recipient_id' => ['required', 'integer', 'exists:users,id', 'different:user_id'],
+        ]);
+        $recipientId = (int) $data['recipient_id'];
+        $userOneId = min($request->user()->id, $recipientId);
+        $userTwoId = max($request->user()->id, $recipientId);
+
+        $conversation = Conversation::with([
+            'userOne:id,first_name,last_name,profile_picture_path',
+            'userTwo:id,first_name,last_name,profile_picture_path',
+        ])
+            ->where('user_one_id', $userOneId)
+            ->where('user_two_id', $userTwoId)
+            ->first();
+
+        if (! $conversation) {
+            $conversation = Conversation::create([
+                'user_one_id' => $userOneId,
+                'user_two_id' => $userTwoId,
+                'requested_by' => $request->user()->id,
+                'status' => 'pending',
+            ]);
+            $conversation->loadMissing([
+                'userOne:id,first_name,last_name,profile_picture_path',
+                'userTwo:id,first_name,last_name,profile_picture_path',
+            ]);
+        } elseif ($conversation->status === 'declined') {
+            $conversation->update([
+                'requested_by' => $request->user()->id,
+                'status' => 'pending',
+                'closed_at' => null,
+            ]);
+        }
+
+        return response()->json($this->formatConversationPayload($conversation, $request->user()));
+    }
+
+    public function acceptRequest(Request $request, Conversation $conversation): JsonResponse
+    {
+        $this->authorizeParticipant($conversation, $request->user());
+        abort_unless(
+            $conversation->user_one_id !== null
+                && $conversation->status === 'pending'
+                && $conversation->requested_by !== $request->user()->id,
+            403,
+            'This message request cannot be accepted.',
+        );
+
+        $conversation->update(['status' => 'accepted']);
+        $conversation->loadMissing([
+            'userOne:id,first_name,last_name,profile_picture_path',
+            'userTwo:id,first_name,last_name,profile_picture_path',
+        ]);
+
+        $requesterId = $conversation->requested_by;
+        $requester = User::find($requesterId);
+        $requester?->notifications()->create([
+            'id' => (string) Str::uuid(),
+            'type' => 'message_request_accepted',
+            'data' => [
+                'title' => 'Message request accepted',
+                'body' => $request->user()->first_name.' accepted your message request.',
+                'conversation_id' => $conversation->id,
+            ],
+        ]);
+
+        return response()->json($this->formatConversationPayload($conversation, $request->user()));
+    }
+
+    public function declineRequest(Request $request, Conversation $conversation): JsonResponse
+    {
+        $this->authorizeParticipant($conversation, $request->user());
+        abort_unless(
+            $conversation->user_one_id !== null
+                && $conversation->status === 'pending'
+                && $conversation->requested_by !== $request->user()->id,
+            403,
+            'This message request cannot be declined.',
+        );
+
+        $conversation->update(['status' => 'declined', 'closed_at' => now()]);
+
+        return response()->json(['message' => 'Message request declined.']);
     }
 
     public function messages(Request $request, Conversation $conversation): JsonResponse
     {
         $this->authorizeParticipant($conversation, $request->user());
         $messages = $conversation->messages()
-            ->with('sender:id,first_name,last_name,profile_picture_path')
+            ->with('sender:id,first_name,last_name,profile_picture_path,role')
             ->oldest()
             ->paginate(50)
             ->through(fn ($message): array => [
@@ -71,6 +165,7 @@ class ConversationController extends Controller
                 'sender_id' => $message->sender_id,
                 'sender_first_name' => $message->sender->first_name,
                 'sender_last_name' => $message->sender->last_name,
+                'sender_role' => $message->sender->role,
                 'sender_profile_picture_url' => $message->sender->profile_picture_path
                     ? PublicMediaUrl::forPath($message->sender->profile_picture_path)
                     : null,
@@ -83,21 +178,73 @@ class ConversationController extends Controller
     public function send(Request $request, Conversation $conversation, TextMasker $masker): JsonResponse
     {
         $this->authorizeParticipant($conversation, $request->user());
-        abort_if($conversation->closed_at || $conversation->created_at->lt(now()->subDays(7)), 409, 'This conversation is closed.');
+        abort_if(
+            $conversation->closed_at
+                || $conversation->status === 'declined'
+                || ($conversation->support_user_id === null
+                    && $conversation->user_one_id === null
+                    && $conversation->created_at->lt(now()->subDays(7))),
+            409,
+            'This conversation is closed.',
+        );
+
+        if ($conversation->user_one_id !== null && $conversation->status === 'pending') {
+            abort_unless(
+                $conversation->requested_by === $request->user()->id,
+                403,
+                'You must accept this message request before replying.',
+            );
+        }
+
         $data = $request->validate(['body' => ['required', 'string', 'max:2000']]);
         $message = $conversation->messages()->create([
             'sender_id' => $request->user()->id,
             'body' => $masker->mask($data['body']),
         ]);
-        $claim = $conversation->claimRequest;
-        $recipient = $request->user()->id === $claim->claimant_id
-            ? $claim->post->author
-            : $claim->claimant;
-        $recipient->notifications()->create([
-            'id' => (string) Str::uuid(),
-            'type' => 'new_message',
-            'data' => ['title' => 'New CampusLF message', 'body' => 'You have a new message about '.$claim->post->item_name],
-        ]);
+        $conversation->touch();
+        if ($conversation->user_one_id !== null) {
+            $recipientId = $conversation->user_one_id === $request->user()->id
+                ? $conversation->user_two_id
+                : $conversation->user_one_id;
+            $recipient = User::find($recipientId);
+            $recipients = $recipient ? collect([$recipient]) : collect();
+            $title = $conversation->status === 'pending'
+                ? 'New message request'
+                : 'New message from '.$request->user()->first_name;
+            $topic = $request->user()->first_name;
+        } elseif ($conversation->support_user_id !== null) {
+            $recipients = User::where('role', 'admin')->where('status', 'active')->get();
+            $title = 'New admin support message';
+            $topic = $conversation->supportSighting?->post?->item_name ?? 'CampusLF';
+        } else {
+            $claim = $conversation->claimRequest;
+            if ($claim) {
+                $recipient = $request->user()->id === $claim->claimant_id
+                    ? $claim->post->author
+                    : $claim->claimant;
+                $recipients = collect([$recipient]);
+                $topic = $claim->post->item_name;
+            } else {
+                $sighting = $conversation->sighting;
+                $recipient = $request->user()->id === $sighting->user_id
+                    ? $sighting->post->author
+                    : $sighting->user;
+                $recipients = collect([$recipient]);
+                $topic = $sighting->post->item_name;
+            }
+            $title = 'New CampusLF message';
+        }
+        foreach ($recipients as $recipient) {
+            $recipient->notifications()->create([
+                'id' => (string) Str::uuid(),
+                'type' => 'new_message',
+                'data' => [
+                    'title' => $title,
+                    'body' => 'You have a new message from '.$request->user()->first_name,
+                    'conversation_id' => $conversation->id,
+                ],
+            ]);
+        }
 
         return response()->json([
             'id' => $message->id,
@@ -105,10 +252,68 @@ class ConversationController extends Controller
             'sender_id' => $request->user()->id,
             'sender_first_name' => $request->user()->first_name,
             'sender_last_name' => $request->user()->last_name,
+            'sender_role' => $request->user()->role,
             'sender_profile_picture_url' => $request->user()->profile_picture_path
                 ? PublicMediaUrl::forPath($request->user()->profile_picture_path)
                 : null,
             'created_at' => $message->created_at,
+        ], 201);
+    }
+
+    public function startAdminChat(
+        Request $request,
+        LostSighting $sighting,
+        TextMasker $masker,
+    ): JsonResponse {
+        $sighting->loadMissing('post');
+        abort_unless(
+            $sighting->answer === 'yes'
+                && $sighting->post->user_id === $request->user()->id,
+            404,
+        );
+        $data = $request->validate([
+            'body' => ['required', 'string', 'max:2000'],
+        ]);
+        $conversation = Conversation::firstOrCreate([
+            'support_user_id' => $request->user()->id,
+            'support_sighting_id' => $sighting->id,
+        ]);
+        $message = $conversation->messages()->create([
+            'sender_id' => $request->user()->id,
+            'body' => $masker->mask($data['body']),
+        ]);
+        $conversation->touch();
+
+        foreach (User::where('role', 'admin')->where('status', 'active')->get() as $admin) {
+            $admin->notifications()->create([
+                'id' => (string) Str::uuid(),
+                'type' => 'admin_chat_message',
+                'data' => [
+                    'title' => 'Evidence review message',
+                    'body' => 'A post owner sent a message about '.$sighting->post->item_name.'.',
+                    'conversation_id' => $conversation->id,
+                    'sighting_id' => $sighting->id,
+                    'post_id' => $sighting->post_id,
+                ],
+            ]);
+        }
+
+        return response()->json([
+            'id' => $conversation->id,
+            'type' => 'admin',
+            'item_name' => 'Admin support · '.$sighting->post->item_name,
+            'other_first_name' => 'TMC',
+            'other_last_name' => 'administrators',
+            'other_user_id' => null,
+            'message' => [
+                'id' => $message->id,
+                'body' => $message->body,
+                'sender_id' => $message->sender_id,
+                'sender_first_name' => $request->user()->first_name,
+                'sender_last_name' => $request->user()->last_name,
+                'sender_role' => $request->user()->role,
+                'created_at' => $message->created_at,
+            ],
         ], 201);
     }
 
@@ -121,6 +326,7 @@ class ConversationController extends Controller
             'claimRequest.conversation:id,claim_id',
             'sighting.post.author:id,first_name',
             'sighting.user:id,first_name',
+            'sighting.conversation:id,sighting_id',
         ])
             ->where(function ($query) use ($user): void {
                 $query->whereHas('claimRequest', function ($claim) use ($user): void {
@@ -156,7 +362,8 @@ class ConversationController extends Controller
                     'item_name' => $post?->item_name ?? 'TMC item',
                     'other_first_name' => ($isOwner ? $finder : $owner)?->first_name ?? 'TMC member',
                     'sighting_id' => $sighting?->id,
-                    'conversation_id' => $claim?->conversation?->id,
+                    'conversation_id' => $claim?->conversation?->id
+                        ?? $sighting?->conversation?->id,
                     'owner_confirmed_at' => $handover->owner_confirmed_at,
                     'finder_confirmed_at' => $handover->finder_confirmed_at,
                     'my_confirmation_at' => $isOwner
@@ -261,13 +468,89 @@ class ConversationController extends Controller
 
     private function authorizeParticipant(Conversation $conversation, User $user): void
     {
+        if ($conversation->user_one_id !== null) {
+            abort_unless(
+                in_array($user->id, [$conversation->user_one_id, $conversation->user_two_id], true)
+                    && $conversation->status !== 'declined',
+                404,
+            );
+
+            return;
+        }
+
+        if ($conversation->support_user_id !== null) {
+            abort_unless($conversation->support_user_id === $user->id, 404);
+
+            return;
+        }
         $conversation->loadMissing('claimRequest.post');
         $claim = $conversation->claimRequest;
+        if (! $claim) {
+            $conversation->loadMissing('sighting.post');
+            $sighting = $conversation->sighting;
+            abort_unless(
+                $sighting
+                    && $sighting->author_decision === 'approved'
+                    && $sighting->admin_decision === 'approved'
+                    && in_array($user->id, [$sighting->post->user_id, $sighting->user_id], true),
+                404,
+            );
+
+            return;
+        }
         abort_unless(
             $claim->status === 'approved'
                 && $claim->author_decision === 'approved'
                 && in_array($user->id, [$claim->claimant_id, $claim->post->user_id], true),
             404,
         );
+    }
+
+    private function formatConversationPayload(Conversation $conversation, User $user): array
+    {
+        $claim = $conversation->claimRequest;
+        $sighting = $conversation->sighting;
+        $post = $claim?->post ?? $sighting?->post;
+
+        if ($conversation->user_one_id !== null) {
+            $otherUser = $conversation->user_one_id === $user->id
+                ? $conversation->userTwo
+                : $conversation->userOne;
+            $itemName = 'Direct Message';
+            $conversationType = 'direct';
+        } elseif ($conversation->support_user_id !== null) {
+            $otherUser = null;
+            $itemName = $conversation->supportSighting?->post?->item_name
+                ? 'Admin support · '.$conversation->supportSighting->post->item_name
+                : 'TMC admin support';
+            $conversationType = 'admin';
+        } else {
+            $isOwner = $claim
+                ? $user->id === $post?->user_id
+                : $user->id === $post?->user_id;
+            $otherUser = $claim
+                ? ($isOwner ? $claim->claimant : $post?->author)
+                : ($isOwner ? $sighting->user : $post?->author);
+            $itemName = $post?->item_name ?? 'TMC item';
+            $conversationType = $claim ? 'claim' : 'evidence';
+        }
+
+        return [
+            'id' => $conversation->id,
+            'type' => $conversationType,
+            'status' => $conversation->status ?? 'accepted',
+            'requested_by' => $conversation->requested_by,
+            'is_request' => $conversation->status === 'pending' && $conversation->requested_by !== $user->id,
+            'is_pending_sender' => $conversation->status === 'pending' && $conversation->requested_by === $user->id,
+            'post_id' => $post?->id ?? $conversation->supportSighting?->post_id,
+            'item_name' => $itemName,
+            'other_user_id' => $otherUser?->id,
+            'other_first_name' => $otherUser?->first_name ?? 'TMC',
+            'other_last_name' => $otherUser?->last_name ?? 'administrators',
+            'other_profile_picture_url' => $otherUser?->profile_picture_path
+                ? PublicMediaUrl::forPath($otherUser->profile_picture_path)
+                : null,
+            'last_message_at' => $conversation->messages()->latest()->value('created_at'),
+        ];
     }
 }

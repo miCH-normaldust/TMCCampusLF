@@ -3,7 +3,7 @@
 @section('title', 'Activity')
 
 @section('content')
-    <h1>Login and logout activity</h1>
+    <h1>Activity Records</h1>
     <section class="card">
         <form method="get" action="{{ route('admin.activity.index') }}">
             <label>From <input type="date" name="from" value="{{ request('from') }}"></label>
@@ -25,6 +25,6 @@
             @endforelse
             </tbody>
         </table></div>
-        {{ $activities->links() }}
+        <div class="pagination">{{ $activities->links() }}</div>
     </section>
 @endsection

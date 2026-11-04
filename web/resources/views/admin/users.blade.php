@@ -7,6 +7,7 @@
     <section class="cards">
         <article class="card">
             <h2>Add a user</h2>
+            <p class="muted">The TMC ID, name, email, user type, and department must match an imported official masterlist record.</p>
             <form method="post" action="{{ route('admin.users.store') }}">
                 @csrf
                 <p><label>First name<br><input name="first_name" required maxlength="100"></label></p>

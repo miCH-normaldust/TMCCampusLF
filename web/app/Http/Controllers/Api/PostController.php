@@ -146,7 +146,7 @@ class PostController extends Controller
         ]);
     }
 
-    public function show(Post $post): PostResource
+    public function show(Request $request, Post $post): PostResource
     {
         abort_unless(
             in_array($post->status, ['active', 'claim_pending', 'handover_pending'], true)
@@ -160,7 +160,8 @@ class PostController extends Controller
             'location:id,name',
             'images',
             'verificationQuestions',
-        ]));
+            'reactions' => fn ($query) => $query->where('user_id', $request->user()?->id),
+        ])->loadCount(['comments', 'reactions']));
     }
 
     public function similar(Request $request)

@@ -206,6 +206,54 @@ class AuthenticationAndPrivacyTest extends TestCase
         ])->assertOk()->assertJsonPath('status', 'pending');
     }
 
+    public function test_password_reset_mail_failure_uses_local_fallback(): void
+    {
+        $this->withoutMiddleware(ThrottleRequests::class);
+        config([
+            'app.env' => 'local',
+            'mail.otp_failure_fallback' => true,
+        ]);
+        $user = User::create([
+            'first_name' => 'Local',
+            'last_name' => 'Reset',
+            'tmc_id_no' => 'TMC-LOCAL-RESET',
+            'email' => 'local-reset@gmail.com',
+            'password' => 'OldLongPassword!123',
+            'role' => 'user',
+            'status' => 'active',
+            'email_verified_at' => now(),
+        ]);
+        $loggedCode = null;
+        $logMailer = \Mockery::mock();
+        $logMailer->shouldReceive('to')->once()->with($user->email)->andReturnSelf();
+        $logMailer->shouldReceive('send')
+            ->once()
+            ->with(\Mockery::on(function (OneTimeCode $mail) use (&$loggedCode): bool {
+                $loggedCode = $mail->code;
+
+                return $mail->purpose === 'password_reset';
+            }));
+
+        Mail::shouldReceive('to')
+            ->once()
+            ->with($user->email)
+            ->andThrow(new TransportException('SMTP authentication failed.'));
+        Mail::shouldReceive('mailer')->once()->with('log')->andReturn($logMailer);
+
+        $this->postJson('/api/v1/forgot-password', ['email' => $user->email])
+            ->assertOk()
+            ->assertJsonPath(
+                'message',
+                'Gmail delivery is unavailable. For local testing, find the password reset code in web/storage/logs/laravel.log.',
+            );
+
+        $this->assertNotNull($loggedCode);
+        $this->postJson('/api/v1/forgot-password/verify-otp', [
+            'email' => $user->email,
+            'code' => $loggedCode,
+        ])->assertOk()->assertJsonStructure(['reset_token']);
+    }
+
     public function test_registered_user_can_receive_verify_code_and_sign_in(): void
     {
         $this->withoutMiddleware(ThrottleRequests::class);

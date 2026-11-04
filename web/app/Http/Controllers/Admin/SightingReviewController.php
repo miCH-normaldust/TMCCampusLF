@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Models\Handover;
 use App\Models\LostSighting;
 use App\Models\PostRetrievalRequest;
+use App\Models\Conversation;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -17,6 +18,15 @@ class SightingReviewController extends Controller
     public function index(): View
     {
         return view('admin.sightings', [
+            'awaitingOwnerReview' => LostSighting::with([
+                'post.author:id,first_name,last_name',
+                'user:id,first_name,last_name',
+            ])
+                ->where('answer', 'yes')
+                ->where('author_decision', 'pending')
+                ->where('admin_decision', 'pending')
+                ->latest()
+                ->get(),
             'sightings' => LostSighting::with([
                 'post.author:id,first_name,last_name',
                 'user:id,first_name,last_name',
@@ -57,11 +67,13 @@ class SightingReviewController extends Controller
                 'admin_decision' => $approved ? 'approved' : 'rejected',
                 'admin_reason' => $data['reason'],
             ]);
+            $conversation = null;
             $sighting->post->update([
                 'status' => $approved ? 'handover_pending' : 'active',
             ]);
             if ($approved) {
                 Handover::firstOrCreate(['sighting_id' => $sighting->id]);
+                $conversation = Conversation::firstOrCreate(['sighting_id' => $sighting->id]);
             }
             foreach ([$sighting->post->author, $sighting->user] as $recipient) {
                 $recipient->notifications()->create([
@@ -70,6 +82,9 @@ class SightingReviewController extends Controller
                     'data' => [
                         'title' => $approved ? 'Sighting approved' : 'Sighting not approved',
                         'body' => $data['reason'],
+                        'sighting_id' => $sighting->id,
+                        'post_id' => $sighting->post_id,
+                        'conversation_id' => $conversation?->id,
                     ],
                 ]);
             }

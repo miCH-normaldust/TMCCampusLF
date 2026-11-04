@@ -41,6 +41,7 @@ Route::prefix('v1')->group(function (): void {
         Route::post('/profile', [AuthController::class, 'updateProfile']);
         Route::get('/my-posts', [PostController::class, 'mine']);
         Route::get('/my-posts/{post}/edit-data', [PostController::class, 'editData']);
+        Route::get('/my-evidence', [InteractionController::class, 'myEvidence']);
         Route::put('/password', [AuthController::class, 'changePassword']);
         Route::post('/device-token', [DeviceTokenController::class, 'store']);
         Route::delete('/device-token', [DeviceTokenController::class, 'destroy']);
@@ -52,6 +53,8 @@ Route::prefix('v1')->group(function (): void {
         Route::post('/posts/{post}/retrieval-request', [PostRetrievalRequestController::class, 'store']);
         Route::get('/posts/{post}/matches', [PostController::class, 'matches']);
         Route::post('/posts/{post}/claims', [ClaimController::class, 'store'])->middleware('throttle:5,1');
+        Route::get('/posts/{post}/my-claim', [ClaimController::class, 'myClaim']);
+        Route::get('/posts/{post}/my-sighting', [InteractionController::class, 'mySighting']);
         Route::get('/claims/awaiting-post-author', [ClaimController::class, 'awaitingPostAuthor']);
         Route::patch('/claims/{claim}/post-author-decision', [ClaimController::class, 'decideForPostAuthor']);
         Route::post('/posts/{post}/comments', [InteractionController::class, 'comment']);
@@ -60,12 +63,16 @@ Route::prefix('v1')->group(function (): void {
         Route::post('/posts/{post}/reports', [InteractionController::class, 'report'])->middleware('throttle:5,1');
         Route::post('/posts/{post}/sightings', [InteractionController::class, 'sighting']);
         Route::get('/posts/{post}/sightings', [InteractionController::class, 'sightings']);
+        Route::post('/sightings/{sighting}/admin-conversation', [ConversationController::class, 'startAdminChat'])->middleware('throttle:10,1');
         Route::patch('/sightings/{sighting}', [InteractionController::class, 'decideSighting']);
         Route::get('/notifications', [NotificationController::class, 'index']);
         Route::patch('/notifications/{notification}/read', [NotificationController::class, 'markRead']);
         Route::get('/conversations', [ConversationController::class, 'index']);
+        Route::post('/conversations/direct', [ConversationController::class, 'startDirectChat']);
         Route::get('/conversations/{conversation}/messages', [ConversationController::class, 'messages']);
         Route::post('/conversations/{conversation}/messages', [ConversationController::class, 'send'])->middleware('throttle:30,1');
+        Route::post('/conversations/{conversation}/accept', [ConversationController::class, 'acceptRequest']);
+        Route::post('/conversations/{conversation}/decline', [ConversationController::class, 'declineRequest']);
         Route::post('/conversations/{conversation}/handover', [ConversationController::class, 'createHandover']);
         Route::post('/handovers/{handover}/confirm', [ConversationController::class, 'confirmHandover']);
         Route::get('/handovers', [ConversationController::class, 'handovers']);

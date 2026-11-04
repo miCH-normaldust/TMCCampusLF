@@ -31,7 +31,7 @@ class PostResource extends JsonResource
             'comments_count' => $this->comments_count ?? 0,
             'my_reaction' => $this->whenLoaded(
                 'reactions',
-                fn () => $this->reactions->first()?->type,
+                fn () => $this->reactions->isNotEmpty() ? 'like' : null,
             ),
             'author_id' => $this->user_id,
             'author_first_name' => $this->author?->first_name,

@@ -90,4 +90,38 @@ class CampusPost {
       myReaction: json['my_reaction'] as String?,
     );
   }
+
+  /// Returns a copy of this post with the reaction fields replaced.
+  ///
+  /// Incoming reaction picks are injected in the UI instead of being parsed
+  /// with JSON, so this keeps the immutable model for optimistic updates.
+  CampusPost withReaction({
+    required int reactionsCount,
+    required String? myReaction,
+  }) {
+    return CampusPost(
+      id: id,
+      type: type,
+      itemName: itemName,
+      description: description,
+      category: category,
+      categoryId: categoryId,
+      color: color,
+      location: location,
+      eventDate: eventDate,
+      status: status,
+      retrievalRequestStatus: retrievalRequestStatus,
+      authorId: authorId,
+      authorFirstName: authorFirstName,
+      authorLastName: authorLastName,
+      authorProfilePictureUrl: authorProfilePictureUrl,
+      questions: questions,
+      isMine: isMine,
+      images: images,
+      createdAt: createdAt,
+      reactionsCount: reactionsCount,
+      commentsCount: commentsCount,
+      myReaction: myReaction,
+    );
+  }
 }

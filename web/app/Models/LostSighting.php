@@ -33,4 +33,9 @@ class LostSighting extends Model
     {
         return $this->hasOne(Handover::class, 'sighting_id');
     }
+
+    public function conversation(): HasOne
+    {
+        return $this->hasOne(Conversation::class, 'sighting_id');
+    }
 }

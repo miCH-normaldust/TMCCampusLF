@@ -10,14 +10,44 @@
         'description' => 'Review requests from owners who recovered their own lost item.',
     ])
     <section class="cards">
+        <article class="card">
+            <h2>Submitted evidence awaiting owner review</h2>
+            <p class="muted">Owners review evidence first. Administrator decisions become available after an owner approves it.</p>
+            @forelse ($awaitingOwnerReview as $sighting)
+                <div class="proof-item">
+                    <div class="proof-item-head">
+                        <h3>{{ $sighting->post->item_name }}</h3>
+                        <span class="muted">Submitted {{ $sighting->created_at->diffForHumans() }}</span>
+                    </div>
+                    <p class="muted">Owner: {{ $sighting->post->author->first_name }} · Evidence from {{ $sighting->user->first_name }}</p>
+                    <p>{{ $sighting->evidence_text }}</p>
+                    @if ($sighting->evidence_image)
+                        @include('admin.partials.proof-image', [
+                            'sighting' => $sighting,
+                            'description' => 'Waiting for the post owner to review this photo.',
+                        ])
+                    @endif
+                </div>
+            @empty
+                <p>No evidence is currently awaiting owner review.</p>
+            @endforelse
+        </article>
+    </section>
+    <section class="proof-list">
         @forelse ($sightings as $sighting)
-            <article class="card">
-                <h2>{{ $sighting->post->item_name }}</h2>
+            <article class="card proof-card">
+                <div class="proof-item-head">
+                    <h2>{{ $sighting->post->item_name }}</h2>
+                    <span class="muted">Submitted {{ $sighting->created_at->diffForHumans() }}</span>
+                </div>
                 <p>{{ $sighting->post->description }}</p>
                 <p class="muted">Owner: {{ $sighting->post->author->first_name }} · Evidence from {{ $sighting->user->first_name }}</p>
-                <p>{{ $sighting->evidence_text }}</p>
+                <p class="proof-text">{{ $sighting->evidence_text }}</p>
                 @if ($sighting->evidence_image)
-                    <img src="{{ \App\Support\PublicMediaUrl::forPath($sighting->evidence_image) }}" alt="Evidence photo for {{ $sighting->post->item_name }}" style="max-width:100%;height:auto;border-radius:10px">
+                    @include('admin.partials.proof-image', [
+                        'sighting' => $sighting,
+                        'description' => 'Open the photo in full size before making a decision.',
+                    ])
                 @endif
                 <form method="post" action="{{ route('admin.sightings.decide', $sighting) }}">
                     @csrf
@@ -31,5 +61,62 @@
             <article class="card">No lost-item evidence is waiting for review.</article>
         @endforelse
     </section>
-    <div class="section">{{ $sightings->links() }}</div>
+    <div class="pagination">{{ $sightings->links() }}</div>
+
+    <div class="image-modal" id="proof-image-modal" role="dialog" aria-modal="true" aria-labelledby="proof-image-title" hidden>
+        <div class="image-modal-panel">
+            <div class="image-modal-head">
+                <div>
+                    <h2 id="proof-image-title">Evidence photo</h2>
+                    <p class="image-modal-meta" id="proof-image-meta"></p>
+                </div>
+                <button class="button secondary" type="button" id="proof-image-close">Close</button>
+            </div>
+            <div class="image-modal-body">
+                <img id="proof-image" src="" alt="Lost-item evidence photo">
+            </div>
+        </div>
+    </div>
+
+    <script>
+        (() => {
+            const modal = document.getElementById('proof-image-modal');
+            if (!modal) return;
+            const image = document.getElementById('proof-image');
+            const title = document.getElementById('proof-image-title');
+            const meta = document.getElementById('proof-image-meta');
+            const closeButton = document.getElementById('proof-image-close');
+            let lastFocused = null;
+
+            const open = (button) => {
+                if (!button.dataset.proofSrc) return;
+                lastFocused = button;
+                image.src = button.dataset.proofSrc;
+                image.alt = 'Evidence photo for ' + (button.dataset.proofTitle || 'this item');
+                title.textContent = button.dataset.proofTitle || 'Evidence photo';
+                meta.textContent = button.dataset.proofMeta || '';
+                modal.hidden = false;
+                document.body.classList.add('image-modal-open');
+                closeButton.focus();
+            };
+
+            const close = () => {
+                modal.hidden = true;
+                image.removeAttribute('src');
+                document.body.classList.remove('image-modal-open');
+                if (lastFocused) lastFocused.focus();
+            };
+
+            document.querySelectorAll('[data-proof-src]').forEach((button) => {
+                button.addEventListener('click', () => open(button));
+            });
+            closeButton.addEventListener('click', close);
+            modal.addEventListener('click', (event) => {
+                if (event.target === modal) close();
+            });
+            document.addEventListener('keydown', (event) => {
+                if (event.key === 'Escape' && !modal.hidden) close();
+            });
+        })();
+    </script>
 @endsection

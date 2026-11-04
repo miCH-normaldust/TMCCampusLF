@@ -35,6 +35,7 @@
                     'Monitoring and Maintenance' => [
                         ['label' => 'Users', 'icon' => '♙', 'route' => 'admin.users.index', 'active' => 'admin.users.*'],
                         ['label' => 'Reports', 'icon' => '⚑', 'route' => 'admin.reports.index', 'active' => 'admin.reports.*', 'count' => 'reports'],
+                        ['label' => 'Chats', 'icon' => '▣', 'route' => 'admin.chats.index', 'active' => 'admin.chats.*'],
                         ['label' => 'Feedback', 'icon' => '✉', 'route' => 'admin.feedback.index', 'active' => 'admin.feedback.*', 'count' => 'feedback'],
                         ['label' => 'Activity', 'icon' => '◷', 'route' => 'admin.activity.index', 'active' => 'admin.activity.*'],
                         ['label' => 'Audit Trail', 'icon' => '▣', 'route' => 'admin.audit.index', 'active' => 'admin.audit.*'],

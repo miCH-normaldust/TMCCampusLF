@@ -11,6 +11,27 @@ import '../models/campus_post.dart';
 import '../services/auth_service.dart';
 import '../widgets/campuslf_brand_mark.dart';
 
+/// Locally applied reaction status so a tap updates the count and highlight
+/// immediately, before the API responds.
+class _ReactionState {
+  const _ReactionState(this.count, this.reaction);
+
+  final int count;
+  final String? reaction;
+}
+
+CampusPost _applyReaction(
+  CampusPost post,
+  Map<int, _ReactionState> overrides,
+) {
+  final override = overrides[post.id];
+  if (override == null) return post;
+  return post.withReaction(
+    reactionsCount: override.count,
+    myReaction: override.reaction,
+  );
+}
+
 class CampusHomeScreen extends StatefulWidget {
   const CampusHomeScreen({
     required this.api,
@@ -47,6 +68,9 @@ class _CampusHomeScreenState extends State<CampusHomeScreen> {
   Timer? _peopleSearchTimer;
   final TextEditingController _homeSearchController = TextEditingController();
   final TextEditingController _peopleSearchController = TextEditingController();
+  final Map<int, _ReactionState> _reactionOverrides = {};
+  int _inboxRefreshKey = 0;
+  int _profileRefreshKey = 0;
 
   @override
   void initState() {
@@ -79,6 +103,24 @@ class _CampusHomeScreenState extends State<CampusHomeScreen> {
 
   void _refreshFeed() {
     setState(() => _posts = _fetchPosts());
+  }
+
+  CampusPost _postWithReaction(CampusPost post) =>
+      _applyReaction(post, _reactionOverrides);
+
+  /// Re-tapping the current bottom navigation destination refreshes that page.
+  void _refreshActiveTab(int index) {
+    if (index == 0) {
+      setState(() {
+        _posts = _fetchPosts();
+        _people = _fetchPeople();
+      });
+      unawaited(_loadFeedCategories());
+    } else if (index == 2) {
+      setState(() => _inboxRefreshKey++);
+    } else if (index == 3) {
+      setState(() => _profileRefreshKey++);
+    }
   }
 
   Future<void> _openUserProfile(int userId) async {
@@ -155,19 +197,38 @@ class _CampusHomeScreenState extends State<CampusHomeScreen> {
   }
 
   Future<void> _reactToPost(CampusPost post) async {
-    final nextReaction = post.myReaction == 'like' ? 'none' : 'like';
-    try {
-      await widget.api.dio.post<void>(
-        '/posts/${post.id}/reactions',
-        data: {'type': nextReaction},
+    final current = _postWithReaction(post);
+    final wasLiked = current.myReaction == 'like';
+    final optimisticCount = current.reactionsCount + (wasLiked ? -1 : 1);
+    setState(() {
+      _reactionOverrides[post.id] = _ReactionState(
+        optimisticCount < 0 ? 0 : optimisticCount,
+        wasLiked ? null : 'like',
       );
-      if (mounted) _refreshFeed();
+    });
+    try {
+      final response = await widget.api.dio.post<Map<String, dynamic>>(
+        '/posts/${post.id}/reactions',
+        data: {'type': wasLiked ? 'none' : 'like'},
+      );
+      if (!mounted) return;
+      setState(() {
+        _reactionOverrides[post.id] = _ReactionState(
+          response.data?['reactions_count'] as int? ?? optimisticCount,
+          response.data?['reaction'] as String?,
+        );
+      });
     } on DioException catch (error) {
-      if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text(widget.api.errorMessage(error))));
-      }
+      if (!mounted) return;
+      setState(() {
+        _reactionOverrides[post.id] = _ReactionState(
+          current.reactionsCount,
+          current.myReaction,
+        );
+      });
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(widget.api.errorMessage(error))));
     }
   }
 
@@ -394,7 +455,9 @@ class _CampusHomeScreenState extends State<CampusHomeScreen> {
       DecoratedBox(
         decoration: secondaryPageDecoration,
         child: InboxScreen(
-          key: ValueKey(_openHandovers),
+          key: ValueKey(
+            'inbox-${_openHandovers ? 'handovers' : 'chats'}-$_inboxRefreshKey',
+          ),
           api: widget.api,
           onOpenProfile: _openUserProfile,
           initialTab: _openHandovers ? 2 : 0,
@@ -403,6 +466,7 @@ class _CampusHomeScreenState extends State<CampusHomeScreen> {
       DecoratedBox(
         decoration: secondaryPageDecoration,
         child: ProfileScreen(
+          key: ValueKey('profile-$_profileRefreshKey'),
           firstName: widget.firstName,
           api: widget.api,
           auth: widget.auth,
@@ -436,10 +500,16 @@ class _CampusHomeScreenState extends State<CampusHomeScreen> {
       body: IndexedStack(index: _tab, children: pages),
       bottomNavigationBar: NavigationBar(
         selectedIndex: _tab,
-        onDestinationSelected: (index) => setState(() {
-          _tab = index;
-          if (index != 2) _openHandovers = false;
-        }),
+        onDestinationSelected: (index) {
+          if (index == _tab) {
+            _refreshActiveTab(index);
+            return;
+          }
+          setState(() {
+            _tab = index;
+            if (index != 2) _openHandovers = false;
+          });
+        },
         destinations: const [
           NavigationDestination(
             icon: Icon(Icons.home_outlined),
@@ -839,7 +909,7 @@ class _CampusHomeScreenState extends State<CampusHomeScreen> {
           sliver: SliverList(
             delegate: SliverChildBuilderDelegate((context, index) {
               if (index.isOdd) return const SizedBox(height: 12);
-              final post = posts[index ~/ 2];
+              final post = _postWithReaction(posts[index ~/ 2]);
               return _PostCard(
                 post: post,
                 onTapAuthor: post.authorId == null
@@ -848,6 +918,8 @@ class _CampusHomeScreenState extends State<CampusHomeScreen> {
                 onOwnerEdit: () => _editOwnedPost(post),
                 onOwnerDelete: () => _deleteOwnedPost(post),
                 onRequestRetrieved: () => _requestPostRetrieved(post),
+                onReport: () =>
+                    unawaited(_reportPost(context, widget.api, post)),
                 onTap: () => showModalBottomSheet<void>(
                   context: context,
                   isScrollControlled: true,
@@ -855,6 +927,15 @@ class _CampusHomeScreenState extends State<CampusHomeScreen> {
                     api: widget.api,
                     post: post,
                     onOpenProfile: _openUserProfile,
+                    onReactionChanged: (reaction, count) {
+                      if (!mounted) return;
+                      setState(() {
+                        _reactionOverrides[post.id] = _ReactionState(
+                          count,
+                          reaction,
+                        );
+                      });
+                    },
                   ),
                 ),
                 onReact: () => _reactToPost(post),
@@ -870,6 +951,15 @@ class _CampusHomeScreenState extends State<CampusHomeScreen> {
                         api: widget.api,
                         post: post,
                         onOpenProfile: _openUserProfile,
+                        onReactionChanged: (reaction, count) {
+                          if (!mounted) return;
+                          setState(() {
+                            _reactionOverrides[post.id] = _ReactionState(
+                              count,
+                              reaction,
+                            );
+                          });
+                        },
                       ),
                     );
                   }
@@ -974,6 +1064,7 @@ class _PostCard extends StatelessWidget {
     required this.onReact,
     required this.onShare,
     required this.onPrimaryAction,
+    required this.onReport,
   });
   final CampusPost post;
   final VoidCallback onTapAuthor;
@@ -984,6 +1075,7 @@ class _PostCard extends StatelessWidget {
   final VoidCallback onReact;
   final VoidCallback onShare;
   final VoidCallback onPrimaryAction;
+  final VoidCallback onReport;
 
   @override
   Widget build(BuildContext context) {
@@ -1080,7 +1172,7 @@ class _PostCard extends StatelessWidget {
                         onTap();
                         break;
                       case 'report':
-                        onTap();
+                        onReport();
                         break;
                       case 'edit':
                         onOwnerEdit();
@@ -1470,117 +1562,13 @@ String _timeAgo(String timestamp) {
   return '${createdAt.month}/${createdAt.day}/${createdAt.year}';
 }
 
-class _PostDetailSheet extends StatefulWidget {
-  const _PostDetailSheet({
-    required this.api,
-    required this.post,
-    this.onOpenProfile,
-  });
-  final ApiClient api;
-  final CampusPost post;
-  final Future<void> Function(int)? onOpenProfile;
-
-  @override
-  State<_PostDetailSheet> createState() => _PostDetailSheetState();
-}
-
-class _PostDetailSheetState extends State<_PostDetailSheet> {
-  final _answers = <TextEditingController>[];
-  final _comment = TextEditingController();
-  bool _busy = false;
-  String? _message;
-  late Future<List<Map<String, dynamic>>> _comments;
-
-  @override
-  void initState() {
-    super.initState();
-    _comments = _loadComments();
-    for (var index = 0; index < widget.post.questions.length; index++) {
-      _answers.add(TextEditingController());
-    }
-  }
-
-  @override
-  void dispose() {
-    for (final answer in _answers) {
-      answer.dispose();
-    }
-    _comment.dispose();
-    super.dispose();
-  }
-
-  Future<List<Map<String, dynamic>>> _loadComments() async {
-    final response = await widget.api.dio.get<Map<String, dynamic>>(
-      '/posts/${widget.post.id}/comments',
-    );
-    final data = response.data?['data'];
-    if (data is! List) return const [];
-    return data.whereType<Map<String, dynamic>>().toList();
-  }
-
-  Future<void> _claim() async {
-    setState(() {
-      _busy = true;
-      _message = null;
-    });
-    try {
-      final response = await widget.api.dio.post<Map<String, dynamic>>(
-        '/posts/${widget.post.id}/claims',
-        data: {'answers': _answers.map((answer) => answer.text).toList()},
-      );
-      if (mounted) {
-        setState(
-          () => _message =
-              response.data?['message'] as String? ?? 'Claim sent for review.',
-        );
-      }
-    } on DioException catch (error) {
-      if (mounted) setState(() => _message = widget.api.errorMessage(error));
-    } finally {
-      if (mounted) setState(() => _busy = false);
-    }
-  }
-
-  Future<void> _sendComment() async {
-    final body = _comment.text.trim();
-    if (body.isEmpty) return;
-    try {
-      await widget.api.dio.post<void>(
-        '/posts/${widget.post.id}/comments',
-        data: {'body': body},
-      );
-      _comment.clear();
-      setState(() => _comments = _loadComments());
-    } on DioException catch (error) {
-      if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text(widget.api.errorMessage(error))));
-      }
-    }
-  }
-
-  Future<void> _react(String type) async {
-    try {
-      await widget.api.dio.post<void>(
-        '/posts/${widget.post.id}/reactions',
-        data: {'type': type},
-      );
-      if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('Reaction updated: $type')));
-      }
-    } on DioException catch (error) {
-      if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text(widget.api.errorMessage(error))));
-      }
-    }
-  }
-
-  Future<void> _report() async {
-    final reason = TextEditingController();
+Future<void> _reportPost(
+  BuildContext context,
+  ApiClient api,
+  CampusPost post,
+) async {
+  final reason = TextEditingController();
+  try {
     final accepted = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
@@ -1603,22 +1591,333 @@ class _PostDetailSheetState extends State<_PostDetailSheet> {
         ],
       ),
     );
-    if (accepted == true && reason.text.trim().isNotEmpty) {
-      try {
-        await widget.api.dio.post<void>(
-          '/posts/${widget.post.id}/reports',
-          data: {'reason': reason.text.trim()},
-        );
-        if (mounted) {
-          setState(
-            () => _message = 'Your report was sent to the TMC administrators.',
-          );
+    if (accepted != true || !context.mounted) return;
+    if (reason.text.trim().isEmpty) {
+      ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+        const SnackBar(content: Text('Enter a reason for the report.')),
+      );
+      return;
+    }
+
+    await api.dio.post<void>(
+      '/posts/${post.id}/reports',
+      data: {'reason': reason.text.trim()},
+    );
+    if (context.mounted) {
+      ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+        const SnackBar(
+          content: Text('Your report was sent to the TMC administrators.'),
+        ),
+      );
+    }
+  } on DioException catch (error) {
+    if (context.mounted) {
+      ScaffoldMessenger.maybeOf(context)
+          ?.showSnackBar(SnackBar(content: Text(api.errorMessage(error))));
+    }
+  } finally {
+    reason.dispose();
+  }
+}
+
+class _PostDetailSheet extends StatefulWidget {
+  const _PostDetailSheet({
+    required this.api,
+    required this.post,
+    this.onOpenProfile,
+    this.onReactionChanged,
+  });
+  final ApiClient api;
+  final CampusPost post;
+  final void Function(String? reaction, int count)? onReactionChanged;
+  final Future<void> Function(int)? onOpenProfile;
+
+  @override
+  State<_PostDetailSheet> createState() => _PostDetailSheetState();
+}
+
+class _PostDetailSheetState extends State<_PostDetailSheet> {
+  final _answers = <TextEditingController>[];
+  final _comment = TextEditingController();
+  bool _busy = false;
+  String? _message;
+  bool _loadingOwnClaim = false;
+  int? _ownClaimId;
+  bool _canEditClaim = false;
+  bool _claimRejected = false;
+  bool _claimCanReapply = false;
+  String? _claimWaitTimeLeft;
+  bool _loadingOwnSighting = false;
+  String? _ownSightingText;
+  String? _ownSightingImage;
+  int? _ownSightingId;
+  bool _canEditSighting = false;
+  bool _sightingRejected = false;
+  bool _sightingCanReapply = false;
+  String? _sightingWaitTimeLeft;
+  String? _replyToName;
+  int? _replyToId;
+  String? _myReaction;
+  int _reactionsCount = 0;
+  late Future<List<Map<String, dynamic>>> _comments;
+
+  @override
+  void initState() {
+    super.initState();
+    _comments = _loadComments();
+    _myReaction = widget.post.myReaction;
+    _reactionsCount = widget.post.reactionsCount;
+    for (var index = 0; index < widget.post.questions.length; index++) {
+      _answers.add(TextEditingController());
+    }
+    if (!widget.post.isMine && widget.post.type == 'found') {
+      unawaited(_loadOwnClaim());
+    }
+    if (!widget.post.isMine && widget.post.type == 'lost') {
+      unawaited(_loadOwnSighting());
+    }
+  }
+
+  @override
+  void dispose() {
+    for (final answer in _answers) {
+      answer.dispose();
+    }
+    _comment.dispose();
+    super.dispose();
+  }
+
+  Future<List<Map<String, dynamic>>> _loadComments() async {
+    final response = await widget.api.dio.get<Map<String, dynamic>>(
+      '/posts/${widget.post.id}/comments',
+    );
+    final data = response.data?['data'];
+    if (data is! List) return const [];
+    return data.whereType<Map<String, dynamic>>().toList();
+  }
+
+  Future<void> _loadOwnClaim() async {
+    setState(() => _loadingOwnClaim = true);
+    try {
+      final response = await widget.api.dio.get<Map<String, dynamic>>(
+        '/posts/${widget.post.id}/my-claim',
+      );
+      final claim = response.data?['data'];
+      if (claim is Map<String, dynamic> && mounted) {
+        final answers = claim['answers'];
+        if (answers is List) {
+          for (
+            var index = 0;
+            index < answers.length && index < _answers.length;
+            index++
+          ) {
+            _answers[index].text = answers[index] as String? ?? '';
+          }
         }
-      } on DioException catch (error) {
-        if (mounted) setState(() => _message = widget.api.errorMessage(error));
+        setState(() {
+          _ownClaimId = claim['id'] as int?;
+          _canEditClaim = claim['editable'] as bool? ?? false;
+          _claimRejected = claim['is_rejected'] as bool? ?? false;
+          _claimCanReapply = claim['can_reapply'] as bool? ?? false;
+          _claimWaitTimeLeft = claim['wait_time_left'] as String?;
+          final status = claim['status'] as String? ?? 'pending';
+          if (status == 'approved' && !_claimRejected) {
+            _message =
+                'Your claim was approved and is awaiting the post owner’s decision.';
+          } else if (_claimRejected) {
+            _message = _claimCanReapply
+                ? 'Your claim was not approved. You can submit another claim.'
+                : 'Your claim was rejected twice. Please wait ${_claimWaitTimeLeft ?? '24h'} before submitting another claim.';
+          } else {
+            _message =
+                'Your claim has already been submitted and is waiting for review.';
+          }
+        });
+      }
+    } on DioException catch (error) {
+      if (mounted) setState(() => _message = widget.api.errorMessage(error));
+    } finally {
+      if (mounted) setState(() => _loadingOwnClaim = false);
+    }
+  }
+
+  Future<void> _loadOwnSighting() async {
+    setState(() => _loadingOwnSighting = true);
+    try {
+      final response = await widget.api.dio.get<Map<String, dynamic>>(
+        '/posts/${widget.post.id}/my-sighting',
+      );
+      final sighting = response.data?['data'];
+      if (sighting is Map<String, dynamic> && mounted) {
+        setState(() {
+          _ownSightingId = sighting['id'] as int?;
+          _ownSightingText = sighting['evidence_text'] as String?;
+          _ownSightingImage = sighting['evidence_image'] as String?;
+          _canEditSighting = sighting['editable'] as bool? ?? false;
+          _sightingRejected = sighting['is_rejected'] as bool? ?? false;
+          _sightingCanReapply = sighting['can_reapply'] as bool? ?? false;
+          _sightingWaitTimeLeft = sighting['wait_time_left'] as String?;
+          final ownerDecision =
+              sighting['author_decision'] as String? ?? 'pending';
+          final adminDecision =
+              sighting['admin_decision'] as String? ?? 'pending';
+          if (_sightingRejected) {
+            final reason =
+                sighting['admin_reason'] as String? ??
+                'Your evidence was not approved.';
+            _message = _sightingCanReapply
+                ? '$reason You can submit new evidence.'
+                : '$reason Please wait ${_sightingWaitTimeLeft ?? '24h'} before submitting evidence again.';
+          } else if (adminDecision == 'approved') {
+            _message =
+                'Your evidence was approved. Open Inbox to chat and arrange the handover.';
+          } else if (ownerDecision == 'approved') {
+            _message =
+                'The post owner approved your evidence. It is waiting for TMC review.';
+          } else {
+            _message =
+                'Your evidence was sent and is waiting for the post owner to review it.';
+          }
+        });
+      }
+    } on DioException catch (error) {
+      if (mounted) setState(() => _message = widget.api.errorMessage(error));
+    } finally {
+      if (mounted) setState(() => _loadingOwnSighting = false);
+    }
+  }
+
+  Future<void> _claim() async {
+    setState(() {
+      _busy = true;
+      _message = null;
+    });
+    try {
+      final response = await widget.api.dio.post<Map<String, dynamic>>(
+        '/posts/${widget.post.id}/claims',
+        data: {'answers': _answers.map((answer) => answer.text).toList()},
+      );
+      if (mounted) {
+        setState(() {
+          _ownClaimId = response.data?['claim_id'] as int? ?? _ownClaimId;
+          _canEditClaim = response.data?['editable'] as bool? ?? false;
+          _claimRejected = false;
+          _claimCanReapply = false;
+          _claimWaitTimeLeft = null;
+          _message =
+              response.data?['message'] as String? ?? 'Claim sent for review.';
+        });
+      }
+    } on DioException catch (error) {
+      if (mounted) setState(() => _message = widget.api.errorMessage(error));
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _sendComment() async {
+    final body = _comment.text.trim();
+    if (body.isEmpty) return;
+    try {
+      await widget.api.dio.post<void>(
+        '/posts/${widget.post.id}/comments',
+        data: {'body': body, if (_replyToId != null) 'parent_id': _replyToId},
+      );
+      _comment.clear();
+      setState(() {
+        _replyToId = null;
+        _replyToName = null;
+        _comments = _loadComments();
+      });
+    } on DioException catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(widget.api.errorMessage(error))));
       }
     }
-    reason.dispose();
+  }
+
+  Future<void> _react() async {
+    final previousReaction = _myReaction;
+    final previousCount = _reactionsCount;
+    final wasLiked = previousReaction == 'like';
+    final optimisticCount = previousCount + (wasLiked ? -1 : 1);
+    setState(() {
+      _myReaction = wasLiked ? null : 'like';
+      _reactionsCount = optimisticCount < 0 ? 0 : optimisticCount;
+    });
+    widget.onReactionChanged?.call(_myReaction, _reactionsCount);
+    try {
+      final response = await widget.api.dio.post<Map<String, dynamic>>(
+        '/posts/${widget.post.id}/reactions',
+        data: {'type': wasLiked ? 'none' : 'like'},
+      );
+      if (!mounted) return;
+      setState(() {
+        _myReaction = response.data?['reaction'] as String?;
+        _reactionsCount =
+            response.data?['reactions_count'] as int? ?? _reactionsCount;
+      });
+      widget.onReactionChanged?.call(_myReaction, _reactionsCount);
+    } on DioException catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _myReaction = previousReaction;
+        _reactionsCount = previousCount;
+      });
+      widget.onReactionChanged?.call(_myReaction, _reactionsCount);
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(widget.api.errorMessage(error))));
+    }
+  }
+
+  Widget _commentTile(Map<String, dynamic> comment, {bool reply = false}) {
+    final firstName = comment['author_first_name'] as String? ?? 'TMC';
+    final lastName = comment['author_last_name'] as String? ?? '';
+    final pictureUrl = comment['author_profile_picture_url'] as String?;
+    final authorId = comment['author_id'] as int?;
+    final replies = comment['replies'];
+    return Padding(
+      padding: EdgeInsets.only(left: reply ? 28 : 0, bottom: 4),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          ListTile(
+            contentPadding: EdgeInsets.zero,
+            leading: CircleAvatar(
+              backgroundColor: Theme.of(context)
+                  .colorScheme
+                  .surfaceContainerHighest,
+              backgroundImage: pictureUrl == null
+                  ? null
+                  : NetworkImage(pictureUrl),
+              child: pictureUrl == null
+                  ? Text(firstName.isEmpty ? '?' : firstName[0].toUpperCase())
+                  : null,
+            ),
+            title: Text('$firstName $lastName'.trim()),
+            subtitle: Text(comment['body'] as String? ?? ''),
+            onTap: widget.onOpenProfile != null && authorId != null
+                ? () => widget.onOpenProfile!(authorId)
+                : null,
+          ),
+          if (!reply)
+            TextButton.icon(
+              onPressed: () => setState(() {
+                _replyToId = comment['id'] as int?;
+                _replyToName = '$firstName $lastName'.trim();
+              }),
+              icon: const Icon(Icons.reply, size: 16),
+              label: const Text('Reply'),
+            ),
+          if (replies is List)
+            for (final item in replies.whereType<Map<String, dynamic>>())
+              _commentTile(item, reply: true),
+        ],
+      ),
+    );
   }
 
   Future<void> _recordNoSighting() async {
@@ -1691,26 +1990,26 @@ class _PostDetailSheetState extends State<_PostDetailSheet> {
                   alignment: Alignment.centerRight,
                   child: IconButton(
                     tooltip: 'Report post',
-                    onPressed: _report,
+                    onPressed: () =>
+                        unawaited(_reportPost(context, widget.api, post)),
                     icon: const Icon(Icons.flag_outlined),
                   ),
                 ),
               Wrap(
                 spacing: 6,
                 children: [
-                  for (final reaction in const ['like', 'haha', 'angry', 'sad'])
-                    ActionChip(
-                      avatar: Icon(switch (reaction) {
-                        'like' => Icons.thumb_up_alt_outlined,
-                        'haha' => Icons.sentiment_satisfied_alt,
-                        'angry' => Icons.sentiment_dissatisfied,
-                        _ => Icons.sentiment_neutral,
-                      }, size: 17),
-                      label: Text(
-                        reaction[0].toUpperCase() + reaction.substring(1),
-                      ),
-                      onPressed: () => _react(reaction),
+                  FilledButton.tonalIcon(
+                    onPressed: _react,
+                    icon: Icon(
+                      _myReaction == 'like'
+                          ? Icons.favorite
+                          : Icons.favorite_border,
+                      color: _myReaction == 'like'
+                          ? Theme.of(context).colorScheme.primary
+                          : null,
                     ),
+                    label: Text('$_reactionsCount'),
+                  ),
                 ],
               ),
               if (post.type == 'found' &&
@@ -1728,19 +2027,41 @@ class _PostDetailSheetState extends State<_PostDetailSheet> {
                   TextField(
                     controller: _answers[index],
                     maxLines: 2,
+                    enabled:
+                        !_loadingOwnClaim &&
+                        (_ownClaimId == null ||
+                            _canEditClaim ||
+                            (_claimRejected && _claimCanReapply)),
                     decoration: const InputDecoration(labelText: 'Your answer'),
                   ),
                   const SizedBox(height: 12),
                 ],
                 const Text(
-                  'Wrong answers use up one of your claim attempts. Your answers are private and reviewed by TMC administrators.',
+                  'You can retry a rejected claim once. After two rejections you must wait 24 hours before submitting again. Your private answers are reviewed by TMC administrators.',
                 ),
                 const SizedBox(height: 12),
                 FilledButton(
-                  onPressed: _busy ? null : _claim,
-                  child: _busy
+                  onPressed:
+                      _busy ||
+                          _loadingOwnClaim ||
+                          (_ownClaimId != null &&
+                              !_canEditClaim &&
+                              !(_claimRejected && _claimCanReapply))
+                      ? null
+                      : _claim,
+                  child: _busy || _loadingOwnClaim
                       ? const CircularProgressIndicator(color: Colors.white)
-                      : const Text('Submit claim'),
+                      : Text(
+                          _ownClaimId == null
+                              ? 'Submit claim'
+                              : _canEditClaim
+                              ? 'Update claim'
+                              : _claimRejected && _claimCanReapply
+                              ? 'Submit another claim'
+                              : _claimRejected
+                              ? 'Wait ${_claimWaitTimeLeft ?? '24h'} to retry'
+                              : 'Claim submitted',
+                        ),
                 ),
               ] else if (post.type == 'lost' && post.isMine) ...[
                 const SizedBox(height: 16),
@@ -1762,15 +2083,44 @@ class _PostDetailSheetState extends State<_PostDetailSheet> {
                   children: [
                     Expanded(
                       child: FilledButton(
-                        onPressed: () => showModalBottomSheet<void>(
-                          context: context,
-                          isScrollControlled: true,
-                          builder: (_) => SightingEvidenceSheet(
-                            api: widget.api,
-                            post: post,
-                          ),
+                        onPressed:
+                            _loadingOwnSighting ||
+                                (_ownSightingId != null &&
+                                    !_canEditSighting &&
+                                    !(_sightingRejected &&
+                                        _sightingCanReapply))
+                            ? null
+                            : () => showModalBottomSheet<void>(
+                                context: context,
+                                isScrollControlled: true,
+                                builder: (_) => SightingEvidenceSheet(
+                                  api: widget.api,
+                                  post: post,
+                                  initialText: _ownSightingText,
+                                  initialImageUrl: _ownSightingImage,
+                                  editable:
+                                      _ownSightingId == null ||
+                                      _canEditSighting ||
+                                      (_sightingRejected &&
+                                          _sightingCanReapply),
+                                  resubmission:
+                                      _sightingRejected && _sightingCanReapply,
+                                  onSubmitted: _loadOwnSighting,
+                                ),
+                              ),
+                        child: Text(
+                          _loadingOwnSighting
+                              ? 'Checking evidence…'
+                              : _ownSightingId == null
+                              ? 'Yes, I have evidence'
+                              : _canEditSighting
+                              ? 'Edit my evidence'
+                              : _sightingRejected && _sightingCanReapply
+                              ? 'Submit new evidence'
+                              : _sightingRejected
+                              ? 'Wait ${_sightingWaitTimeLeft ?? '24h'} to resubmit'
+                              : 'Evidence submitted',
                         ),
-                        child: const Text('Yes, I have evidence'),
                       ),
                     ),
                     const SizedBox(width: 8),
@@ -1800,61 +2150,31 @@ class _PostDetailSheetState extends State<_PostDetailSheet> {
                   return Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      for (final comment in comments)
-                        Builder(
-                          builder: (context) {
-                            final firstName =
-                                comment['author_first_name'] as String? ??
-                                'TMC';
-                            final lastName =
-                                comment['author_last_name'] as String? ?? '';
-                            final pictureUrl =
-                                comment['author_profile_picture_url']
-                                    as String?;
-                            final authorId = comment['author_id'] as int?;
-                            return ListTile(
-                              contentPadding: EdgeInsets.zero,
-                              leading: CircleAvatar(
-                                backgroundColor: Theme.of(context)
-                                    .colorScheme
-                                    .surfaceContainerHighest,
-                                backgroundImage: pictureUrl == null
-                                    ? null
-                                    : NetworkImage(pictureUrl),
-                                child: pictureUrl == null
-                                    ? Text(
-                                        firstName.isEmpty
-                                            ? '?'
-                                            : firstName[0].toUpperCase(),
-                                        style: TextStyle(
-                                          color: Theme.of(context)
-                                              .colorScheme
-                                              .primary,
-                                        ),
-                                      )
-                                    : null,
-                              ),
-                              title: Text('$firstName $lastName'.trim()),
-                              subtitle: Text(comment['body'] as String? ?? ''),
-                              onTap:
-                                  widget.onOpenProfile != null &&
-                                      authorId != null
-                                  ? () => widget.onOpenProfile!(authorId)
-                                  : null,
-                            );
-                          },
-                        ),
+                      for (final comment in comments) _commentTile(comment),
                     ],
                   );
                 },
               ),
+              if (_replyToId != null)
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: Text('Replying to ${_replyToName ?? 'comment'}'),
+                  trailing: IconButton(
+                    tooltip: 'Cancel reply',
+                    onPressed: () => setState(() {
+                      _replyToId = null;
+                      _replyToName = null;
+                    }),
+                    icon: const Icon(Icons.close),
+                  ),
+                ),
               Row(
                 children: [
                   Expanded(
                     child: TextField(
                       controller: _comment,
                       decoration: const InputDecoration(
-                        labelText: 'Add a comment',
+                        labelText: 'Add a comment or reply',
                       ),
                     ),
                   ),
@@ -1890,20 +2210,36 @@ class SightingEvidenceSheet extends StatefulWidget {
   const SightingEvidenceSheet({
     required this.api,
     required this.post,
+    required this.editable,
+    this.initialText,
+    this.initialImageUrl,
+    this.resubmission = false,
+    this.onSubmitted,
     super.key,
   });
   final ApiClient api;
   final CampusPost post;
+  final String? initialText;
+  final String? initialImageUrl;
+  final bool editable;
+  final bool resubmission;
+  final VoidCallback? onSubmitted;
 
   @override
   State<SightingEvidenceSheet> createState() => _SightingEvidenceSheetState();
 }
 
 class _SightingEvidenceSheetState extends State<SightingEvidenceSheet> {
-  final _description = TextEditingController();
+  late final TextEditingController _description;
   XFile? _photo;
   bool _busy = false;
   String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _description = TextEditingController(text: widget.initialText ?? '');
+  }
 
   @override
   void dispose() {
@@ -1920,7 +2256,8 @@ class _SightingEvidenceSheetState extends State<SightingEvidenceSheet> {
   }
 
   Future<void> _submit() async {
-    if (_description.text.trim().isEmpty || _photo == null) {
+    if (_description.text.trim().isEmpty ||
+        (_photo == null && widget.initialImageUrl == null)) {
       setState(() => _error = 'Add a short description and an evidence photo.');
       return;
     }
@@ -1929,18 +2266,22 @@ class _SightingEvidenceSheetState extends State<SightingEvidenceSheet> {
       _error = null;
     });
     try {
-      final data = FormData.fromMap({
+      final fields = <String, dynamic>{
         'answer': 'yes',
         'evidence_text': _description.text.trim(),
-        'evidence_image': await MultipartFile.fromFile(
+      };
+      if (_photo != null) {
+        fields['evidence_image'] = await MultipartFile.fromFile(
           _photo!.path,
           filename: _photo!.name,
-        ),
-      });
+        );
+      }
+      final data = FormData.fromMap(fields);
       await widget.api.dio.post<void>(
         '/posts/${widget.post.id}/sightings',
         data: data,
       );
+      widget.onSubmitted?.call();
       if (mounted) Navigator.pop(context);
     } on DioException catch (error) {
       if (mounted) setState(() => _error = widget.api.errorMessage(error));
@@ -1964,27 +2305,45 @@ class _SightingEvidenceSheetState extends State<SightingEvidenceSheet> {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             Text(
-              'Share sighting evidence',
+              widget.resubmission || widget.initialText == null
+                  ? 'Share sighting evidence'
+                  : 'Edit sighting evidence',
               style: Theme.of(context).textTheme.titleLarge,
             ),
             const SizedBox(height: 8),
-            const Text(
-              'Your description and photo go to the post author and TMC administrators for review.',
+            Text(
+              widget.resubmission
+                  ? 'Your previous evidence was not approved. Submit new evidence for this item.'
+                  : 'Submit evidence once for this post. You can update it during the first hour.',
             ),
             const SizedBox(height: 14),
             TextField(
               controller: _description,
               maxLines: 3,
+              enabled: widget.editable,
               decoration: const InputDecoration(
                 labelText: 'Where and when did you see it?',
               ),
             ),
             const SizedBox(height: 12),
             OutlinedButton.icon(
-              onPressed: _pickPhoto,
+              onPressed: widget.editable ? _pickPhoto : null,
               icon: const Icon(Icons.photo_library_outlined),
               label: Text(_photo?.name ?? 'Choose evidence photo'),
             ),
+            if (_photo == null && widget.initialImageUrl != null) ...[
+              const SizedBox(height: 8),
+              ClipRRect(
+                borderRadius: BorderRadius.circular(12),
+                child: Image.network(
+                  widget.initialImageUrl!,
+                  height: 150,
+                  fit: BoxFit.cover,
+                  errorBuilder: (_, _, _) =>
+                      const Text('Previously submitted photo could not load.'),
+                ),
+              ),
+            ],
             if (_error != null)
               Padding(
                 padding: const EdgeInsets.all(8),
@@ -1995,10 +2354,14 @@ class _SightingEvidenceSheetState extends State<SightingEvidenceSheet> {
               ),
             const SizedBox(height: 12),
             FilledButton(
-              onPressed: _busy ? null : _submit,
+              onPressed: _busy || !widget.editable ? null : _submit,
               child: _busy
                   ? const CircularProgressIndicator(color: Colors.white)
-                  : const Text('Send to owner'),
+                  : Text(
+                      widget.resubmission || widget.initialText == null
+                          ? 'Send to owner'
+                          : 'Update evidence',
+                    ),
             ),
           ],
         ),
@@ -2852,6 +3215,8 @@ class _InboxScreenState extends State<InboxScreen> {
   late Future<List<Map<String, dynamic>>> _conversations;
   late Future<List<Map<String, dynamic>>> _handovers;
   late Future<List<Map<String, dynamic>>> _authorClaims;
+  late Future<List<Map<String, dynamic>>> _evidence;
+  String _conversationFilter = 'all';
 
   @override
   void initState() {
@@ -2861,6 +3226,7 @@ class _InboxScreenState extends State<InboxScreen> {
     _conversations = _loadConversations();
     _handovers = _loadHandovers();
     _authorClaims = _loadAuthorClaims();
+    _evidence = _loadEvidence();
   }
 
   @override
@@ -2907,6 +3273,15 @@ class _InboxScreenState extends State<InboxScreen> {
     return data.whereType<Map<String, dynamic>>().toList();
   }
 
+  Future<List<Map<String, dynamic>>> _loadEvidence() async {
+    final response = await widget.api.dio.get<Map<String, dynamic>>(
+      '/my-evidence',
+    );
+    final data = response.data?['data'];
+    if (data is! List) return const [];
+    return data.whereType<Map<String, dynamic>>().toList();
+  }
+
   Future<void> _markRead(String id) async {
     try {
       await widget.api.dio.patch<void>('/notifications/$id/read');
@@ -2920,6 +3295,97 @@ class _InboxScreenState extends State<InboxScreen> {
     }
   }
 
+  Future<void> _openNotification(Map<String, dynamic> notification) async {
+    final id = notification['id'] as String?;
+    if (id != null && id.isNotEmpty) await _markRead(id);
+    if (!mounted) return;
+    final data = notification['data'] as Map<String, dynamic>? ?? const {};
+    final conversationId = data['conversation_id'] as int?;
+    if (conversationId != null) {
+      try {
+        final response = await widget.api.dio.get<Map<String, dynamic>>(
+          '/conversations',
+        );
+        final raw = response.data?['data'];
+        final conversations = raw is List
+            ? raw.whereType<Map<String, dynamic>>().toList()
+            : const <Map<String, dynamic>>[];
+        final conversation = conversations
+            .cast<Map<String, dynamic>?>()
+            .firstWhere(
+              (item) => item?['id'] == conversationId,
+              orElse: () => null,
+            );
+        if (conversation != null && mounted) {
+          await Navigator.of(context).push(
+            MaterialPageRoute<void>(
+              builder: (_) => ConversationScreen(
+                api: widget.api,
+                conversation: conversation,
+                onOpenProfile: widget.onOpenProfile,
+              ),
+            ),
+          );
+        }
+      } on DioException catch (error) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text(widget.api.errorMessage(error))),
+          );
+        }
+      }
+      return;
+    }
+
+    final notificationType = notification['type'] as String? ?? '';
+    if (notificationType == 'lost_sighting') {
+      setState(() {
+        _tab = 4;
+        _evidence = _loadEvidence();
+      });
+      return;
+    }
+    if (notificationType == 'claim_owner_review') {
+      setState(() {
+        _tab = 3;
+        _authorClaims = _loadAuthorClaims();
+      });
+      return;
+    }
+
+    final postId = data['post_id'] as int?;
+    if (postId == null) return;
+    try {
+      final response = await widget.api.dio.get<Map<String, dynamic>>(
+        '/posts/$postId',
+      );
+      final postData = response.data?['data'] is Map<String, dynamic>
+          ? response.data!['data'] as Map<String, dynamic>
+          : response.data;
+      if (postData == null || !mounted) return;
+      await showModalBottomSheet<void>(
+        context: context,
+        isScrollControlled: true,
+        builder: (_) => _PostDetailSheet(
+          api: widget.api,
+          post: CampusPost.fromJson(postData),
+          onOpenProfile: widget.onOpenProfile,
+        ),
+      );
+    } on DioException catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(widget.api.errorMessage(error))));
+      }
+    } on FormatException catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(error.message)));
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Column(
@@ -2929,39 +3395,19 @@ class _InboxScreenState extends State<InboxScreen> {
           child: _SectionBanner(
             icon: Icons.inbox_rounded,
             title: 'Your campus inbox',
-            subtitle: 'Updates, conversations, claims, and safe handovers.',
+            subtitle: 'Updates, chats, evidence, claims, and handovers.',
             tint: Color(0xFF8C5A92),
           ),
         ),
-        SegmentedButton<int>(
-          segments: const [
-            ButtonSegment(
-              value: 0,
-              label: Text('Notifications'),
-              icon: Icon(Icons.notifications_none),
-            ),
-            ButtonSegment(
-              value: 1,
-              label: Text('Chats'),
-              icon: Icon(Icons.chat_bubble_outline),
-            ),
-            ButtonSegment(
-              value: 2,
-              label: Text('Handovers'),
-              icon: Icon(Icons.handshake_outlined),
-            ),
-            ButtonSegment(
-              value: 3,
-              label: Text('Claims'),
-              icon: Icon(Icons.fact_check_outlined),
-            ),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            _inboxTabButton(0, Icons.notifications_none, 'Notifications'),
+            _inboxTabButton(1, Icons.chat_bubble_outline, 'Chats'),
+            _inboxTabButton(2, Icons.handshake_outlined, 'Handovers'),
+            _inboxTabButton(3, Icons.fact_check_outlined, 'Claims'),
+            _inboxTabButton(4, Icons.photo_library_outlined, 'Evidence'),
           ],
-          selected: {_tab},
-          onSelectionChanged: (values) => setState(() {
-            _tab = values.first;
-            if (_tab == 2) _handovers = _loadHandovers();
-            if (_tab == 3) _authorClaims = _loadAuthorClaims();
-          }),
         ),
         const SizedBox(height: 8),
         Expanded(
@@ -2971,9 +3417,32 @@ class _InboxScreenState extends State<InboxScreen> {
               ? _conversationList()
               : _tab == 2
               ? _handoverList()
-              : _authorClaimList(),
+              : _tab == 3
+              ? _authorClaimList()
+              : _evidenceList(),
         ),
       ],
+    );
+  }
+
+  Widget _inboxTabButton(int tab, IconData icon, String label) {
+    return Tooltip(
+      message: label,
+      child: IconButton.filledTonal(
+        onPressed: () => setState(() {
+          _tab = tab;
+          if (tab == 1) _conversations = _loadConversations();
+          if (tab == 2) _handovers = _loadHandovers();
+          if (tab == 3) _authorClaims = _loadAuthorClaims();
+          if (tab == 4) _evidence = _loadEvidence();
+        }),
+        icon: Icon(icon),
+        style: IconButton.styleFrom(
+          backgroundColor: _tab == tab
+              ? Theme.of(context).colorScheme.secondaryContainer
+              : Colors.transparent,
+        ),
+      ),
     );
   }
 
@@ -3023,7 +3492,9 @@ class _InboxScreenState extends State<InboxScreen> {
                   ),
                   title: Text(data['title'] as String? ?? 'CampusLF update'),
                   subtitle: Text(data['body'] as String? ?? ''),
-                  onTap: id.isEmpty ? null : () => _markRead(id),
+                  onTap: id.isEmpty
+                      ? null
+                      : () => _openNotification(notification),
                 ),
               );
             },
@@ -3052,76 +3523,362 @@ class _InboxScreenState extends State<InboxScreen> {
             ),
           );
         }
-        final conversations = snapshot.data ?? const [];
+        final allConversations = snapshot.data ?? const [];
+        final conversations = allConversations.where((conversation) {
+          final type = conversation['type'] as String? ?? 'claim';
+          final isRequest = conversation['is_request'] as bool? ?? false;
+          if (_conversationFilter == 'request') return isRequest;
+          if (_conversationFilter == 'all') return true;
+          return type == _conversationFilter;
+        }).toList();
+
+        final categoryFilterRow = Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12),
+          child: Wrap(
+            spacing: 8,
+            children: [
+              for (final filter in const [
+                ('all', 'All'),
+                ('request', 'Requests'),
+                ('direct', 'Direct'),
+                ('claim', 'Claims'),
+                ('evidence', 'Evidence'),
+                ('admin', 'TMC admins'),
+              ])
+                ChoiceChip(
+                  label: Text(filter.$2),
+                  selected: _conversationFilter == filter.$1,
+                  onSelected: (_) =>
+                      setState(() => _conversationFilter = filter.$1),
+                ),
+            ],
+          ),
+        );
+
         if (conversations.isEmpty) {
-          return const _EmptyState(
-            icon: Icons.chat_bubble_outline,
-            title: 'No approved chats',
-            message: 'Chats open after a TMC administrator approves a claim.',
-          );
-        }
-        return ListView.builder(
-          padding: const EdgeInsets.all(16),
-          itemCount: conversations.length,
-          itemBuilder: (context, index) {
-            final conversation = conversations[index];
-            final otherUserId = conversation['other_user_id'] as int?;
-            final firstName =
-                conversation['other_first_name'] as String? ?? 'TMC';
-            final lastName = conversation['other_last_name'] as String? ?? '';
-            final pictureUrl =
-                conversation['other_profile_picture_url'] as String?;
-            return Card(
-              child: ListTile(
-                leading: InkWell(
-                  onTap: otherUserId == null
-                      ? null
-                      : () => widget.onOpenProfile(otherUserId),
-                  customBorder: const CircleBorder(),
-                  child: CircleAvatar(
-                    backgroundColor: Theme.of(context)
-                        .colorScheme
-                        .surfaceContainerHighest,
-                    backgroundImage: pictureUrl == null
-                        ? null
-                        : NetworkImage(pictureUrl),
-                    child: pictureUrl == null
-                        ? Text(
-                            firstName.isEmpty
-                                ? '?'
-                                : firstName[0].toUpperCase(),
-                            style: TextStyle(
-                              color: Theme.of(context).colorScheme.primary,
-                            ),
-                          )
-                        : null,
-                  ),
-                ),
-                title: Text(conversation['item_name'] as String? ?? 'TMC item'),
-                subtitle: InkWell(
-                  onTap: otherUserId == null
-                      ? null
-                      : () => widget.onOpenProfile(otherUserId),
-                  child: Text(
-                    'Chat with $firstName $lastName'.trim(),
-                    style: TextStyle(
-                      color: Theme.of(context).colorScheme.primary,
-                    ),
-                  ),
-                ),
-                trailing: const Icon(Icons.chevron_right),
-                onTap: () => Navigator.of(context).push(
-                  MaterialPageRoute(
-                    builder: (_) => ConversationScreen(
-                      api: widget.api,
-                      conversation: conversation,
-                      onOpenProfile: widget.onOpenProfile,
-                    ),
-                  ),
+          return Column(
+            children: [
+              categoryFilterRow,
+              const Expanded(
+                child: _EmptyState(
+                  icon: Icons.chat_bubble_outline,
+                  title: 'No chats in this category',
+                  message: 'Direct messages, claims, evidence, and TMC support conversations appear here.',
                 ),
               ),
-            );
-          },
+            ],
+          );
+        }
+        return Column(
+          children: [
+            categoryFilterRow,
+            Expanded(
+              child: ListView.builder(
+                padding: const EdgeInsets.all(16),
+                itemCount: conversations.length,
+                itemBuilder: (context, index) {
+                  final conversation = conversations[index];
+                  final otherUserId = conversation['other_user_id'] as int?;
+                  final firstName =
+                      conversation['other_first_name'] as String? ?? 'TMC';
+                  final lastName =
+                      conversation['other_last_name'] as String? ?? '';
+                  final pictureUrl =
+                      conversation['other_profile_picture_url'] as String?;
+                  final isRequest = conversation['is_request'] as bool? ?? false;
+                  return Card(
+                    child: ListTile(
+                      leading: otherUserId == null
+                          ? CircleAvatar(
+                              child: Icon(
+                                conversation['type'] == 'admin'
+                                    ? Icons.support_agent
+                                    : Icons.person_outline,
+                              ),
+                            )
+                          : InkWell(
+                              onTap: () => widget.onOpenProfile(otherUserId),
+                              customBorder: const CircleBorder(),
+                              child: CircleAvatar(
+                                backgroundColor: Theme.of(context)
+                                    .colorScheme
+                                    .surfaceContainerHighest,
+                                backgroundImage: pictureUrl == null
+                                    ? null
+                                    : NetworkImage(pictureUrl),
+                                child: pictureUrl == null
+                                    ? Text(
+                                        firstName.isEmpty
+                                            ? '?'
+                                            : firstName[0].toUpperCase(),
+                                        style: TextStyle(
+                                          color: Theme.of(context)
+                                              .colorScheme
+                                              .primary,
+                                        ),
+                                      )
+                                    : null,
+                              ),
+                            ),
+                      title: Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              conversation['item_name'] as String? ?? 'TMC item',
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                          if (isRequest)
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 6,
+                                vertical: 2,
+                              ),
+                              decoration: BoxDecoration(
+                                color: Theme.of(context).colorScheme.errorContainer,
+                                borderRadius: BorderRadius.circular(6),
+                              ),
+                              child: Text(
+                                'Request',
+                                style: TextStyle(
+                                  fontSize: 11,
+                                  color: Theme.of(context).colorScheme.onErrorContainer,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                            ),
+                        ],
+                      ),
+                      subtitle: InkWell(
+                        onTap: otherUserId == null
+                            ? null
+                            : () => widget.onOpenProfile(otherUserId),
+                        child: Text(
+                          isRequest
+                              ? 'Message Request from $firstName $lastName'.trim()
+                              : 'Chat with $firstName $lastName'.trim(),
+                          style: TextStyle(
+                            color: Theme.of(context).colorScheme.primary,
+                          ),
+                        ),
+                      ),
+                      trailing: const Icon(Icons.chevron_right),
+                      onTap: () async {
+                        await Navigator.of(context).push(
+                          MaterialPageRoute<void>(
+                            builder: (_) => ConversationScreen(
+                              api: widget.api,
+                              conversation: conversation,
+                              onOpenProfile: widget.onOpenProfile,
+                            ),
+                          ),
+                        );
+                        if (mounted) {
+                          setState(() {
+                            _conversations = _loadConversations();
+                          });
+                        }
+                      },
+                    ),
+                  );
+                },
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Future<void> _decideEvidence(int id, String decision) async {
+    try {
+      await widget.api.dio.patch<void>(
+        '/sightings/$id',
+        data: {'decision': decision},
+      );
+      if (mounted) {
+        setState(() {
+          _evidence = _loadEvidence();
+          _handovers = _loadHandovers();
+        });
+      }
+    } on DioException catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(widget.api.errorMessage(error))));
+      }
+    }
+  }
+
+  Future<void> _messageAdminAboutEvidence(Map<String, dynamic> evidence) async {
+    final message = TextEditingController(
+      text:
+          'Please review the evidence for ${evidence['item_name'] ?? 'my lost item'}. I believe it is valid.',
+    );
+    try {
+      final body = await showDialog<String>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('Message TMC administrators'),
+          content: TextField(
+            controller: message,
+            maxLines: 4,
+            maxLength: 2000,
+            decoration: const InputDecoration(labelText: 'Message'),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(context, message.text.trim()),
+              child: const Text('Open chat'),
+            ),
+          ],
+        ),
+      );
+      if (body == null || body.isEmpty || !mounted) return;
+      final response = await widget.api.dio.post<Map<String, dynamic>>(
+        '/sightings/${evidence['id']}/admin-conversation',
+        data: {'body': body},
+      );
+      if (!mounted) return;
+      final conversation = response.data;
+      if (conversation == null) return;
+      setState(() {
+        _tab = 1;
+        _conversationFilter = 'admin';
+        _conversations = _loadConversations();
+      });
+      await Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (_) => ConversationScreen(
+            api: widget.api,
+            conversation: conversation,
+            onOpenProfile: widget.onOpenProfile,
+          ),
+        ),
+      );
+    } on DioException catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(widget.api.errorMessage(error))));
+      }
+    } finally {
+      message.dispose();
+    }
+  }
+
+  Widget _evidenceList() {
+    return FutureBuilder<List<Map<String, dynamic>>>(
+      future: _evidence,
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const Center(child: CircularProgressIndicator());
+        }
+        if (snapshot.hasError) {
+          return _EmptyState(
+            icon: Icons.cloud_off,
+            title: 'Evidence unavailable',
+            message: widget.api.errorMessage(snapshot.error!),
+            action: FilledButton.tonal(
+              onPressed: () => setState(() => _evidence = _loadEvidence()),
+              child: const Text('Try again'),
+            ),
+          );
+        }
+        final evidence = snapshot.data ?? const [];
+        if (evidence.isEmpty) {
+          return const _EmptyState(
+            icon: Icons.photo_library_outlined,
+            title: 'No evidence submitted',
+            message: 'Evidence sent for your lost posts will appear here for review.',
+          );
+        }
+        return RefreshIndicator(
+          onRefresh: () async => setState(() => _evidence = _loadEvidence()),
+          child: ListView.builder(
+            padding: const EdgeInsets.all(14),
+            itemCount: evidence.length,
+            itemBuilder: (context, index) {
+              final item = evidence[index];
+              final id = item['id'] as int;
+              final authorDecision =
+                  item['author_decision'] as String? ?? 'pending';
+              final adminDecision =
+                  item['admin_decision'] as String? ?? 'pending';
+              return Card(
+                child: Padding(
+                  padding: const EdgeInsets.all(14),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        item['item_name'] as String? ?? 'Lost item',
+                        style: Theme.of(context).textTheme.titleMedium,
+                      ),
+                      Text(
+                        'Evidence from ${item['finder_first_name'] ?? 'TMC member'} · Owner: $authorDecision · Admin: $adminDecision',
+                      ),
+                      if ((item['evidence_text'] as String? ?? '').isNotEmpty)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 8),
+                          child: Text(item['evidence_text'] as String),
+                        ),
+                      if (item['evidence_image'] is String) ...[
+                        const SizedBox(height: 10),
+                        ClipRRect(
+                          borderRadius: BorderRadius.circular(12),
+                          child: Image.network(
+                            item['evidence_image'] as String,
+                            errorBuilder: (_, _, _) => const Text(
+                              'Evidence photo could not be loaded.',
+                            ),
+                          ),
+                        ),
+                      ],
+                      if (adminDecision != 'approved' &&
+                          adminDecision != 'rejected') ...[
+                        const SizedBox(height: 10),
+                        if (authorDecision == 'pending')
+                          Wrap(
+                            spacing: 8,
+                            children: [
+                              FilledButton.tonal(
+                                onPressed: () => _decideEvidence(id, 'approve'),
+                                child: const Text('Approve evidence'),
+                              ),
+                              OutlinedButton(
+                                onPressed: () => _decideEvidence(id, 'reject'),
+                                child: const Text('Reject'),
+                              ),
+                            ],
+                          )
+                        else if (authorDecision == 'approved') ...[
+                          Text(
+                            item['admin_reason'] as String? ??
+                                'Waiting for TMC administrator review.',
+                          ),
+                          OutlinedButton.icon(
+                            onPressed: () => _messageAdminAboutEvidence(item),
+                            icon: const Icon(Icons.support_agent),
+                            label: const Text('Nudge TMC admins'),
+                          ),
+                        ] else ...[
+                          const Text(
+                            'You declined this evidence. It will not be sent for administrator approval.',
+                          ),
+                        ],
+                      ],
+                    ],
+                  ),
+                ),
+              );
+            },
+          ),
         );
       },
     );
@@ -3426,15 +4183,18 @@ class ConversationScreen extends StatefulWidget {
 
 class _ConversationScreenState extends State<ConversationScreen> {
   final _message = TextEditingController();
+  late Map<String, dynamic> _conversation;
   late Future<List<Map<String, dynamic>>> _messages;
   Timer? _polling;
   bool _sending = false;
+  bool _actingOnRequest = false;
 
-  int get _conversationId => widget.conversation['id'] as int;
+  int get _conversationId => _conversation['id'] as int;
 
   @override
   void initState() {
     super.initState();
+    _conversation = Map<String, dynamic>.from(widget.conversation);
     _messages = _loadMessages();
     _polling = Timer.periodic(const Duration(seconds: 5), (_) {
       if (mounted) setState(() => _messages = _loadMessages());
@@ -3455,6 +4215,57 @@ class _ConversationScreenState extends State<ConversationScreen> {
     final data = response.data?['data'];
     if (data is! List) return const [];
     return data.whereType<Map<String, dynamic>>().toList();
+  }
+
+  Future<void> _acceptRequest() async {
+    if (_actingOnRequest) return;
+    setState(() => _actingOnRequest = true);
+    try {
+      final response = await widget.api.dio.post<Map<String, dynamic>>(
+        '/conversations/$_conversationId/accept',
+      );
+      if (mounted && response.data != null) {
+        setState(() {
+          _conversation = Map<String, dynamic>.from(response.data!);
+          _messages = _loadMessages();
+        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Message request accepted.')),
+        );
+      }
+    } on DioException catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(widget.api.errorMessage(error))));
+      }
+    } finally {
+      if (mounted) setState(() => _actingOnRequest = false);
+    }
+  }
+
+  Future<void> _declineRequest() async {
+    if (_actingOnRequest) return;
+    setState(() => _actingOnRequest = true);
+    try {
+      await widget.api.dio.post<void>(
+        '/conversations/$_conversationId/decline',
+      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Message request declined.')),
+        );
+        Navigator.of(context).pop();
+      }
+    } on DioException catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(widget.api.errorMessage(error))));
+      }
+    } finally {
+      if (mounted) setState(() => _actingOnRequest = false);
+    }
   }
 
   Future<void> _send() async {
@@ -3481,14 +4292,17 @@ class _ConversationScreenState extends State<ConversationScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final itemName = widget.conversation['item_name'] as String? ?? 'TMC item';
-    final otherUserId = widget.conversation['other_user_id'] as int?;
+    final isRequest = _conversation['is_request'] as bool? ?? false;
+    final isPendingSender =
+        _conversation['is_pending_sender'] as bool? ?? false;
+    final itemName = _conversation['item_name'] as String? ?? 'TMC item';
+    final otherUserId = _conversation['other_user_id'] as int?;
     final otherFirstName =
-        widget.conversation['other_first_name'] as String? ?? 'TMC';
+        _conversation['other_first_name'] as String? ?? 'TMC';
     final otherLastName =
-        widget.conversation['other_last_name'] as String? ?? '';
+        _conversation['other_last_name'] as String? ?? '';
     final otherPicture =
-        widget.conversation['other_profile_picture_url'] as String?;
+        _conversation['other_profile_picture_url'] as String?;
     return Scaffold(
       appBar: AppBar(
         title: Column(
@@ -3539,13 +4353,39 @@ class _ConversationScreenState extends State<ConversationScreen> {
       ),
       body: Column(
         children: [
-          const MaterialBanner(
-            content: Text(
-              'Only proceed with the item exchange after all required approvals. Confirm it here after the handover is complete.',
+          if (isRequest)
+            MaterialBanner(
+              content: Text(
+                '$otherFirstName sent you a message request. Accept to start chatting.',
+              ),
+              leading: const Icon(Icons.mark_email_unread_outlined),
+              actions: [
+                TextButton(
+                  onPressed: _actingOnRequest ? null : _declineRequest,
+                  child: const Text('Decline'),
+                ),
+                FilledButton(
+                  onPressed: _actingOnRequest ? null : _acceptRequest,
+                  child: const Text('Accept'),
+                ),
+              ],
+            )
+          else if (isPendingSender)
+            MaterialBanner(
+              content: Text(
+                'Message request sent. Waiting for $otherFirstName to accept.',
+              ),
+              leading: const Icon(Icons.hourglass_empty),
+              actions: const [SizedBox.shrink()],
+            )
+          else
+            const MaterialBanner(
+              content: Text(
+                'Only proceed with the item exchange after all required approvals. Confirm it here after the handover is complete.',
+              ),
+              leading: Icon(Icons.shield_outlined),
+              actions: [SizedBox.shrink()],
             ),
-            leading: Icon(Icons.shield_outlined),
-            actions: [SizedBox.shrink()],
-          ),
           Expanded(
             child: FutureBuilder<List<Map<String, dynamic>>>(
               future: _messages,
@@ -3560,8 +4400,12 @@ class _ConversationScreenState extends State<ConversationScreen> {
                 }
                 final messages = snapshot.data ?? const [];
                 if (messages.isEmpty) {
-                  return const Center(
-                    child: Text('Start a safe, item-related conversation.'),
+                  return Center(
+                    child: Text(
+                      isRequest
+                          ? '$otherFirstName sent you a message request.'
+                          : 'Start a safe, direct conversation.',
+                    ),
                   );
                 }
                 return ListView.builder(
@@ -3571,15 +4415,21 @@ class _ConversationScreenState extends State<ConversationScreen> {
                   itemBuilder: (context, index) {
                     final message = messages[messages.length - index - 1];
                     final senderId = message['sender_id'] as int?;
-                    final isOtherSender = senderId == otherUserId;
+                    final senderRole = message['sender_role'] as String?;
+                    final senderProfileId = senderRole == 'admin'
+                        ? null
+                        : senderId;
+                    final isOtherSender = _conversation['type'] == 'admin'
+                        ? senderRole == 'admin'
+                        : senderId == otherUserId;
                     final senderFirstName =
                         message['sender_first_name'] as String? ?? 'TMC';
                     final senderPicture =
                         message['sender_profile_picture_url'] as String?;
                     final profileAvatar = InkWell(
-                      onTap: senderId == null
+                      onTap: senderProfileId == null
                           ? null
-                          : () => widget.onOpenProfile(senderId),
+                          : () => widget.onOpenProfile(senderProfileId),
                       customBorder: const CircleBorder(),
                       child: CircleAvatar(
                         radius: 18,
@@ -3608,9 +4458,9 @@ class _ConversationScreenState extends State<ConversationScreen> {
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             InkWell(
-                              onTap: senderId == null
+                              onTap: senderProfileId == null
                                   ? null
-                                  : () => widget.onOpenProfile(senderId),
+                                  : () => widget.onOpenProfile(senderProfileId),
                               child: Text(
                                 '$senderFirstName ${message['sender_last_name'] as String? ?? ''}'
                                     .trim(),
@@ -3636,10 +4486,10 @@ class _ConversationScreenState extends State<ConversationScreen> {
                             ? [
                                 profileAvatar,
                                 const SizedBox(width: 6),
-                                messageCard,
+                                Flexible(child: messageCard),
                               ]
                             : [
-                                messageCard,
+                                Flexible(child: messageCard),
                                 const SizedBox(width: 6),
                                 profileAvatar,
                               ],
@@ -3653,25 +4503,48 @@ class _ConversationScreenState extends State<ConversationScreen> {
           SafeArea(
             child: Padding(
               padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
-              child: Row(
-                children: [
-                  Expanded(
-                    child: TextField(
-                      controller: _message,
-                      maxLength: 2000,
-                      decoration: const InputDecoration(labelText: 'Message'),
+              child: isRequest
+                  ? Row(
+                      children: [
+                        Expanded(
+                          child: OutlinedButton(
+                            onPressed: _actingOnRequest
+                                ? null
+                                : _declineRequest,
+                            child: const Text('Decline Request'),
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: FilledButton(
+                            onPressed: _actingOnRequest
+                                ? null
+                                : _acceptRequest,
+                            child: const Text('Accept Request'),
+                          ),
+                        ),
+                      ],
+                    )
+                  : Row(
+                      children: [
+                        Expanded(
+                          child: TextField(
+                            controller: _message,
+                            maxLength: 2000,
+                            decoration:
+                                const InputDecoration(labelText: 'Message'),
+                          ),
+                        ),
+                        IconButton(
+                          tooltip: 'Send message',
+                          onPressed: _sending ? null : _send,
+                          icon: Icon(
+                            Icons.send,
+                            color: Theme.of(context).colorScheme.primary,
+                          ),
+                        ),
+                      ],
                     ),
-                  ),
-                  IconButton(
-                    tooltip: 'Send message',
-                    onPressed: _sending ? null : _send,
-                    icon: Icon(
-                      Icons.send,
-                      color: Theme.of(context).colorScheme.primary,
-                    ),
-                  ),
-                ],
-              ),
             ),
           ),
         ],
@@ -3699,6 +4572,7 @@ class PublicProfileScreen extends StatefulWidget {
 class _PublicProfileScreenState extends State<PublicProfileScreen> {
   Map<String, dynamic>? _profile;
   late Future<List<CampusPost>> _posts;
+  final Map<int, _ReactionState> _reactionOverrides = {};
   bool _loadingProfile = true;
   String? _profileError;
 
@@ -3750,49 +4624,11 @@ class _PublicProfileScreenState extends State<PublicProfileScreen> {
 
   Future<void> _openMessage() async {
     try {
-      final response = await widget.api.dio.get<Map<String, dynamic>>(
-        '/conversations',
+      final response = await widget.api.dio.post<Map<String, dynamic>>(
+        '/conversations/direct',
+        data: {'recipient_id': widget.userId},
       );
-      final data = response.data?['data'];
-      final conversations = data is List
-          ? data
-                .whereType<Map<String, dynamic>>()
-                .where(
-                  (conversation) =>
-                      conversation['other_user_id'] == widget.userId,
-                )
-                .toList()
-          : const <Map<String, dynamic>>[];
-      if (!mounted) return;
-      if (conversations.isEmpty) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text(
-              'Messaging opens after an administrator approves a claim related to this member.',
-            ),
-          ),
-        );
-        return;
-      }
-      final conversation = conversations.length == 1
-          ? conversations.single
-          : await showModalBottomSheet<Map<String, dynamic>>(
-              context: context,
-              builder: (context) => SafeArea(
-                child: ListView(
-                  shrinkWrap: true,
-                  children: [
-                    const ListTile(title: Text('Choose a claim conversation')),
-                    for (final item in conversations)
-                      ListTile(
-                        leading: const Icon(Icons.chat_outlined),
-                        title: Text(item['item_name'] as String? ?? 'TMC item'),
-                        onTap: () => Navigator.pop(context, item),
-                      ),
-                  ],
-                ),
-              ),
-            );
+      final conversation = response.data;
       if (!mounted || conversation == null) return;
       await Navigator.of(context).push(
         MaterialPageRoute<void>(
@@ -3819,22 +4655,48 @@ class _PublicProfileScreenState extends State<PublicProfileScreen> {
       api: widget.api,
       post: post,
       onOpenProfile: widget.onOpenProfile,
+      onReactionChanged: (reaction, count) {
+        if (!mounted) return;
+        setState(() {
+          _reactionOverrides[post.id] = _ReactionState(count, reaction);
+        });
+      },
     ),
   );
 
   Future<void> _react(CampusPost post) async {
-    try {
-      await widget.api.dio.post<void>(
-        '/posts/${post.id}/reactions',
-        data: {'type': post.myReaction == 'like' ? 'none' : 'like'},
+    final current = _applyReaction(post, _reactionOverrides);
+    final wasLiked = current.myReaction == 'like';
+    final optimisticCount = current.reactionsCount + (wasLiked ? -1 : 1);
+    setState(() {
+      _reactionOverrides[post.id] = _ReactionState(
+        optimisticCount < 0 ? 0 : optimisticCount,
+        wasLiked ? null : 'like',
       );
-      if (mounted) setState(() => _posts = _loadPosts());
+    });
+    try {
+      final response = await widget.api.dio.post<Map<String, dynamic>>(
+        '/posts/${post.id}/reactions',
+        data: {'type': wasLiked ? 'none' : 'like'},
+      );
+      if (!mounted) return;
+      setState(() {
+        _reactionOverrides[post.id] = _ReactionState(
+          response.data?['reactions_count'] as int? ?? optimisticCount,
+          response.data?['reaction'] as String?,
+        );
+      });
     } on DioException catch (error) {
-      if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text(widget.api.errorMessage(error))));
-      }
+      if (!mounted) return;
+      setState(() {
+        _reactionOverrides[post.id] = _ReactionState(
+          current.reactionsCount,
+          current.myReaction,
+        );
+      });
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(widget.api.errorMessage(error))));
     }
   }
 
@@ -3990,9 +4852,13 @@ class _PublicProfileScreenState extends State<PublicProfileScreen> {
                   message: 'This member has no visible community posts.',
                 );
               }
+              final displayPosts = [
+                for (final post in posts)
+                  _applyReaction(post, _reactionOverrides),
+              ];
               return Column(
                 children: [
-                  for (final post in posts)
+                  for (final post in displayPosts)
                     Padding(
                       padding: const EdgeInsets.only(bottom: 12),
                       child: _PostCard(
@@ -4001,6 +4867,8 @@ class _PublicProfileScreenState extends State<PublicProfileScreen> {
                         onOwnerEdit: () {},
                         onOwnerDelete: () {},
                         onRequestRetrieved: () {},
+                        onReport: () =>
+                            unawaited(_reportPost(context, widget.api, post)),
                         onTap: () => _showPost(post),
                         onReact: () => _react(post),
                         onShare: () => SharePlus.instance.share(
@@ -4069,6 +4937,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
   bool _hasMorePosts = false;
   int _myPostsPage = 1;
   int _requestVersion = 0;
+  final Map<int, _ReactionState> _reactionOverrides = {};
   String? _profileError;
   String? _postsError;
   bool _sendingFeedback = false;
@@ -4199,6 +5068,42 @@ class _ProfileScreenState extends State<ProfileScreen> {
           _postsError = error.message;
         });
       }
+    }
+  }
+
+  Future<void> _toggleReaction(CampusPost post) async {
+    final current = _applyReaction(post, _reactionOverrides);
+    final wasLiked = current.myReaction == 'like';
+    final optimisticCount = current.reactionsCount + (wasLiked ? -1 : 1);
+    setState(() {
+      _reactionOverrides[post.id] = _ReactionState(
+        optimisticCount < 0 ? 0 : optimisticCount,
+        wasLiked ? null : 'like',
+      );
+    });
+    try {
+      final response = await widget.api.dio.post<Map<String, dynamic>>(
+        '/posts/${post.id}/reactions',
+        data: {'type': wasLiked ? 'none' : 'like'},
+      );
+      if (!mounted) return;
+      setState(() {
+        _reactionOverrides[post.id] = _ReactionState(
+          response.data?['reactions_count'] as int? ?? optimisticCount,
+          response.data?['reaction'] as String?,
+        );
+      });
+    } on DioException catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _reactionOverrides[post.id] = _ReactionState(
+          current.reactionsCount,
+          current.myReaction,
+        );
+      });
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(widget.api.errorMessage(error))));
     }
   }
 
@@ -4684,34 +5589,35 @@ class _ProfileScreenState extends State<ProfileScreen> {
             child: Center(child: Text('No posts match these filters.')),
           )
         else ...[
-          for (final post in _myPosts)
+          for (final post in [
+            for (final post in _myPosts)
+              _applyReaction(post, _reactionOverrides),
+          ])
             _PostCard(
               post: post,
               onTapAuthor: () {},
               onOwnerEdit: () => unawaited(_editPost(post)),
               onOwnerDelete: () => unawaited(_deletePost(post)),
               onRequestRetrieved: () => unawaited(_requestRetrieved(post)),
+              onReport: () => unawaited(_reportPost(context, widget.api, post)),
               onTap: () => showModalBottomSheet<void>(
                 context: context,
                 isScrollControlled: true,
-                builder: (_) => _PostDetailSheet(api: widget.api, post: post),
+                builder: (_) => _PostDetailSheet(
+                  api: widget.api,
+                  post: post,
+                  onReactionChanged: (reaction, count) {
+                    if (!mounted) return;
+                    setState(() {
+                      _reactionOverrides[post.id] = _ReactionState(
+                        count,
+                        reaction,
+                      );
+                    });
+                  },
+                ),
               ),
-              onReact: () async {
-                final messenger = ScaffoldMessenger.of(context);
-                try {
-                  await widget.api.dio.post<void>(
-                    '/posts/${post.id}/reactions',
-                    data: {'type': post.myReaction == 'like' ? 'none' : 'like'},
-                  );
-                  if (mounted) _loadMyPosts();
-                } on DioException catch (error) {
-                  if (mounted) {
-                    messenger.showSnackBar(
-                      SnackBar(content: Text(widget.api.errorMessage(error))),
-                    );
-                  }
-                }
-              },
+              onReact: () => unawaited(_toggleReaction(post)),
               onShare: () => SharePlus.instance.share(
                 ShareParams(
                   text:
@@ -4727,8 +5633,19 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   : () => showModalBottomSheet<void>(
                       context: context,
                       isScrollControlled: true,
-                      builder: (_) =>
-                          _PostDetailSheet(api: widget.api, post: post),
+                      builder: (_) => _PostDetailSheet(
+                        api: widget.api,
+                        post: post,
+                        onReactionChanged: (reaction, count) {
+                          if (!mounted) return;
+                          setState(() {
+                            _reactionOverrides[post.id] = _ReactionState(
+                              count,
+                              reaction,
+                            );
+                          });
+                        },
+                      ),
                     ),
             ),
           if (_postsError != null)

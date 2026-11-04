@@ -20,8 +20,12 @@ class InteractionController extends Controller
     public function comments(Post $post): JsonResponse
     {
         $comments = $post->comments()
-            ->with('author:id,first_name,last_name,profile_picture_path')
-            ->latest()
+            ->whereNull('parent_id')
+            ->with([
+                'author:id,first_name,last_name,profile_picture_path',
+                'replies.author:id,first_name,last_name,profile_picture_path',
+            ])
+            ->oldest()
             ->paginate(30)
             ->through(fn (Comment $comment): array => [
                 'id' => $comment->id,
@@ -33,6 +37,20 @@ class InteractionController extends Controller
                     ? PublicMediaUrl::forPath($comment->author->profile_picture_path)
                     : null,
                 'created_at' => $comment->created_at,
+                'parent_id' => null,
+                'replies' => $comment->replies->map(fn (Comment $reply): array => [
+                    'id' => $reply->id,
+                    'body' => $reply->body,
+                    'author_id' => $reply->user_id,
+                    'author_first_name' => $reply->author->first_name,
+                    'author_last_name' => $reply->author->last_name,
+                    'author_profile_picture_url' => $reply->author->profile_picture_path
+                        ? PublicMediaUrl::forPath($reply->author->profile_picture_path)
+                        : null,
+                    'created_at' => $reply->created_at,
+                    'parent_id' => $reply->parent_id,
+                    'replies' => [],
+                ])->all(),
             ]);
 
         return response()->json($comments);
@@ -41,12 +59,23 @@ class InteractionController extends Controller
     public function comment(Request $request, Post $post, TextMasker $masker): JsonResponse
     {
         abort_unless(in_array($post->status, ['active', 'claim_pending', 'handover_pending'], true), 404);
-        $data = $request->validate(['body' => ['required', 'string', 'max:2000']]);
+        $data = $request->validate([
+            'body' => ['required', 'string', 'max:2000'],
+            'parent_id' => ['nullable', 'integer', 'exists:comments,id'],
+        ]);
+        if (isset($data['parent_id'])) {
+            abort_unless(
+                $post->comments()->whereKey($data['parent_id'])->whereNull('parent_id')->exists(),
+                422,
+                'Replies can only be added to a top-level comment on this post.',
+            );
+        }
         $limit = (int) DB::table('settings')->where('key', 'comments_per_day')->value('value') ?: 30;
         abort_if($request->user()->comments()->whereDate('created_at', today())->count() >= $limit, 429, 'Daily comment limit reached.');
         $comment = $post->comments()->create([
             'user_id' => $request->user()->id,
             'body' => $masker->mask($data['body']),
+            'parent_id' => $data['parent_id'] ?? null,
         ]);
 
         return response()->json([
@@ -67,11 +96,14 @@ class InteractionController extends Controller
 
     public function react(Request $request, Post $post): JsonResponse
     {
-        $data = $request->validate(['type' => ['required', 'in:like,haha,angry,sad,none']]);
+        $data = $request->validate(['type' => ['required', 'in:like,none']]);
         if ($data['type'] === 'none') {
             $post->reactions()->where('user_id', $request->user()->id)->delete();
 
-            return response()->json(['reaction' => null]);
+            return response()->json([
+                'reaction' => null,
+                'reactions_count' => $post->reactions()->count(),
+            ]);
         }
 
         $reaction = $post->reactions()->updateOrCreate(
@@ -79,7 +111,10 @@ class InteractionController extends Controller
             ['type' => $data['type']],
         );
 
-        return response()->json(['reaction' => $reaction->type]);
+        return response()->json([
+            'reaction' => 'like',
+            'reactions_count' => $post->reactions()->count(),
+        ]);
     }
 
     public function report(Request $request, Post $post): JsonResponse
@@ -125,33 +160,220 @@ class InteractionController extends Controller
 
     public function sighting(Request $request, Post $post, ImageReencoder $images, TextMasker $masker): JsonResponse
     {
-        abort_unless($post->type === 'lost' && $post->status === 'active', 409, 'This lost post is not accepting sightings.');
+        abort_unless($post->type === 'lost' && in_array($post->status, ['active', 'claim_pending'], true), 409, 'This lost post is not accepting sightings.');
         abort_unless($post->user_id !== $request->user()->id, 403, 'You cannot submit a sighting for your own post.');
         $data = $request->validate([
             'answer' => ['required', 'in:yes,no'],
             'evidence_text' => ['required_if:answer,yes', 'nullable', 'string', 'max:2000'],
-            'evidence_image' => ['nullable', 'required_if:answer,yes', 'image', 'mimes:jpg,jpeg,png,webp', 'max:5120'],
+            'evidence_image' => ['nullable', 'image', 'mimes:jpg,jpeg,png,webp', 'max:5120'],
         ]);
 
-        $imagePath = isset($data['evidence_image']) ? $images->store($data['evidence_image']) : null;
-        $sighting = $post->sightings()->create([
-            'user_id' => $request->user()->id,
-            'answer' => $data['answer'],
-            'evidence_text' => isset($data['evidence_text']) ? $masker->mask($data['evidence_text']) : null,
-            'evidence_image' => $imagePath,
-        ]);
-        if ($data['answer'] === 'yes') {
+        $result = DB::transaction(function () use ($request, $post, $data, $images, $masker): array {
+            $lockedPost = Post::whereKey($post->id)->lockForUpdate()->firstOrFail();
+
+            if ($data['answer'] !== 'yes') {
+                $sighting = $lockedPost->sightings()->create([
+                    'user_id' => $request->user()->id,
+                    'answer' => 'no',
+                ]);
+
+                return [$sighting, false];
+            }
+
+            $userSightings = $lockedPost->sightings()
+                ->where('user_id', $request->user()->id)
+                ->where('answer', 'yes')
+                ->latest()
+                ->get();
+
+            $latestSighting = $userSightings->first();
+
+            if ($latestSighting && $latestSighting->author_decision === 'pending' && $latestSighting->admin_decision === 'pending') {
+                abort_unless(
+                    $latestSighting->created_at->gt(now()->subHour()),
+                    409,
+                    'Your evidence is under review and can only be edited during the first hour.',
+                );
+
+                $imagePath = isset($data['evidence_image'])
+                    ? $images->store($data['evidence_image'])
+                    : $latestSighting->evidence_image;
+
+                $latestSighting->update([
+                    'evidence_text' => isset($data['evidence_text']) ? $masker->mask($data['evidence_text']) : null,
+                    'evidence_image' => $imagePath,
+                ]);
+
+                return [$latestSighting->fresh(), true];
+            }
+
+            if ($latestSighting && ($latestSighting->author_decision === 'approved' || $latestSighting->admin_decision === 'approved')) {
+                abort(409, 'Your evidence has already been approved.');
+            }
+
+            $rejectedSightings = $userSightings->filter(function ($s) {
+                return $s->author_decision === 'rejected' || $s->admin_decision === 'rejected';
+            });
+
+            $rejectionsCount = $rejectedSightings->count();
+            if ($rejectionsCount >= 2) {
+                $lastRejected = $rejectedSightings->first();
+                $lastRejectedAt = $lastRejected->updated_at ?? $lastRejected->created_at;
+                $waitPeriodEnd = $lastRejectedAt->copy()->addHours(24);
+
+                if (now()->lt($waitPeriodEnd)) {
+                    $minutesLeft = (int) ceil(now()->diffInSeconds($waitPeriodEnd) / 60);
+                    $hours = floor($minutesLeft / 60);
+                    $mins = $minutesLeft % 60;
+                    $timeStr = $hours > 0 ? "{$hours}h {$mins}m" : "{$mins}m";
+
+                    abort(429, "Your previous evidence attempts were rejected. After 2 rejections, please wait {$timeStr} before submitting evidence again.");
+                }
+            }
+
+            abort_if(! isset($data['evidence_image']) && $latestSighting?->evidence_image === null, 422, 'An evidence photo is required.');
+
+            $imagePath = isset($data['evidence_image'])
+                ? $images->store($data['evidence_image'])
+                : $latestSighting?->evidence_image;
+
+            $sighting = $lockedPost->sightings()->create([
+                'user_id' => $request->user()->id,
+                'answer' => 'yes',
+                'evidence_text' => isset($data['evidence_text']) ? $masker->mask($data['evidence_text']) : null,
+                'evidence_image' => $imagePath,
+                'author_decision' => 'pending',
+                'admin_decision' => 'pending',
+            ]);
+
+            return [$sighting->fresh(), false];
+        });
+        [$sighting, $updated] = $result;
+        if ($data['answer'] === 'yes' && ! $updated) {
             $post->author->notifications()->create([
                 'id' => (string) Str::uuid(),
                 'type' => 'lost_sighting',
-                'data' => ['title' => 'Someone saw your item', 'body' => 'A TMC member sent evidence for your lost item.'],
+                'data' => [
+                    'title' => 'Someone sent evidence for your lost item',
+                    'body' => 'Review the evidence from Inbox > Evidence.',
+                    'post_id' => $post->id,
+                    'sighting_id' => $sighting->id,
+                ],
             ]);
+            foreach (User::where('role', 'admin')->where('status', 'active')->get() as $admin) {
+                $admin->notifications()->create([
+                    'id' => (string) Str::uuid(),
+                    'type' => 'sighting_submitted',
+                    'data' => [
+                        'title' => 'Lost-item evidence submitted',
+                        'body' => 'The post owner must review this evidence before administrator review.',
+                        'post_id' => $post->id,
+                        'sighting_id' => $sighting->id,
+                    ],
+                ]);
+            }
         }
 
         return response()->json([
             'message' => $data['answer'] === 'yes' ? 'Evidence sent to the post author for review.' : 'Your answer was recorded.',
             'sighting_id' => $sighting->id,
-        ], 201);
+            'updated' => $updated,
+            'editable' => $data['answer'] === 'yes',
+        ], $updated ? 200 : 201);
+    }
+
+    public function mySighting(Request $request, Post $post): JsonResponse
+    {
+        $userSightings = $post->sightings()
+            ->where('user_id', $request->user()->id)
+            ->where('answer', 'yes')
+            ->latest()
+            ->get();
+
+        $sighting = $userSightings->first();
+
+        if (! $sighting) {
+            return response()->json(['data' => null]);
+        }
+
+        $rejectedSightings = $userSightings->filter(function ($s) {
+            return $s->author_decision === 'rejected' || $s->admin_decision === 'rejected';
+        });
+
+        $rejectionsCount = $rejectedSightings->count();
+        $isRejected = $sighting->author_decision === 'rejected' || $sighting->admin_decision === 'rejected';
+        $canReapply = false;
+        $waitTimeStr = null;
+
+        if ($isRejected) {
+            if ($rejectionsCount < 2) {
+                $canReapply = true;
+            } else {
+                $lastRejected = $rejectedSightings->first();
+                $lastRejectedAt = $lastRejected->updated_at ?? $lastRejected->created_at;
+                $waitPeriodEnd = $lastRejectedAt->copy()->addHours(24);
+
+                if (now()->gte($waitPeriodEnd)) {
+                    $canReapply = true;
+                } else {
+                    $minutesLeft = (int) ceil(now()->diffInSeconds($waitPeriodEnd) / 60);
+                    $hours = floor($minutesLeft / 60);
+                    $mins = $minutesLeft % 60;
+                    $waitTimeStr = $hours > 0 ? "{$hours}h {$mins}m" : "{$mins}m";
+                }
+            }
+        }
+
+        return response()->json(['data' => [
+            'id' => $sighting->id,
+            'evidence_text' => $sighting->evidence_text,
+            'evidence_image' => $sighting->evidence_image
+                ? PublicMediaUrl::forPath($sighting->evidence_image)
+                : null,
+            'author_decision' => $sighting->author_decision,
+            'admin_decision' => $sighting->admin_decision,
+            'admin_reason' => $sighting->admin_reason,
+            'editable_until' => $sighting->created_at->copy()->addHour(),
+            'editable' => $sighting->author_decision === 'pending'
+                && $sighting->admin_decision === 'pending'
+                && $sighting->created_at->gt(now()->subHour()),
+            'is_rejected' => $isRejected,
+            'rejections_count' => $rejectionsCount,
+            'can_reapply' => $canReapply,
+            'wait_time_left' => $waitTimeStr,
+        ]]);
+    }
+
+    public function myEvidence(Request $request): JsonResponse
+    {
+        $evidence = LostSighting::with([
+            'post:id,item_name,type,user_id',
+            'post.author:id,first_name,last_name',
+            'user:id,first_name,last_name',
+            'conversation:id,sighting_id',
+        ])
+            ->where('answer', 'yes')
+            ->whereHas('post', fn ($query) => $query->where('user_id', $request->user()->id))
+            ->latest()
+            ->paginate(25)
+            ->through(fn (LostSighting $sighting): array => [
+                'id' => $sighting->id,
+                'post_id' => $sighting->post_id,
+                'item_name' => $sighting->post->item_name,
+                'finder_first_name' => $sighting->user->first_name,
+                'finder_last_name' => $sighting->user->last_name,
+                'evidence_text' => $sighting->evidence_text,
+                'evidence_image' => $sighting->evidence_image
+                    ? PublicMediaUrl::forPath($sighting->evidence_image)
+                    : null,
+                'author_decision' => $sighting->author_decision,
+                'admin_decision' => $sighting->admin_decision,
+                'admin_reason' => $sighting->admin_reason,
+                'conversation_id' => $sighting->conversation?->id,
+                'created_at' => $sighting->created_at,
+            ]);
+
+        return response()->json($evidence);
     }
 
     public function sightings(Request $request, Post $post): JsonResponse
@@ -170,6 +392,7 @@ class InteractionController extends Controller
                     'evidence_image' => $sighting->evidence_image ? PublicMediaUrl::forPath($sighting->evidence_image) : null,
                     'author_decision' => $sighting->author_decision,
                     'admin_decision' => $sighting->admin_decision,
+                    'admin_reason' => $sighting->admin_reason,
                     'handover_id' => $sighting->handover?->id,
                     'created_at' => $sighting->created_at,
                 ]),
@@ -194,9 +417,24 @@ class InteractionController extends Controller
                         ? 'The post author approved a sighting for '.$sighting->post->item_name.'.'
                         : 'The post author rejected a sighting.',
                     'sighting_id' => $sighting->id,
+                    'post_id' => $sighting->post_id,
                 ],
             ]);
         }
+        $sighting->user->notifications()->create([
+            'id' => (string) Str::uuid(),
+            'type' => 'sighting_owner_reviewed',
+            'data' => [
+                'title' => $data['decision'] === 'approve'
+                    ? 'The post owner approved your evidence'
+                    : 'The post owner did not approve your evidence',
+                'body' => $data['decision'] === 'approve'
+                    ? 'Your evidence is now waiting for TMC administrator review.'
+                    : 'The post owner reviewed your evidence.',
+                'sighting_id' => $sighting->id,
+                'post_id' => $sighting->post_id,
+            ],
+        ]);
 
         return response()->json(['message' => 'Your evidence review was recorded.']);
     }

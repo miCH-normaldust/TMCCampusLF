@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
 use App\Models\ClaimRequest;
+use App\Models\Conversation;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -60,20 +61,26 @@ class ClaimReviewController extends Controller
                         'data' => ['title' => 'Claim not approved', 'body' => 'Another claim for this item was approved.'],
                     ]);
                 }
-                DB::table('conversations')->insertOrIgnore([
-                    'claim_id' => $claim->id,
-                    'created_at' => now(),
-                    'updated_at' => now(),
-                ]);
+                $conversation = Conversation::firstOrCreate(['claim_id' => $claim->id]);
                 $claim->post->author->notifications()->create([
                     'id' => (string) Str::uuid(),
                     'type' => 'claim_approved',
-                    'data' => ['title' => 'Claim approved', 'body' => 'A claim for your found item was approved.'],
+                    'data' => [
+                        'title' => 'Claim approved',
+                        'body' => 'A claim for your found item was approved.',
+                        'post_id' => $claim->post_id,
+                        'claim_id' => $claim->id,
+                    ],
                 ]);
                 $claim->claimant->notifications()->create([
                     'id' => (string) Str::uuid(),
                     'type' => 'claim_approved',
-                    'data' => ['title' => 'Claim approved for owner review', 'body' => 'An administrator approved your claim. The item poster must agree before handover can proceed.'],
+                    'data' => [
+                        'title' => 'Claim approved for owner review',
+                        'body' => 'An administrator approved your claim. The item poster must agree before handover can proceed.',
+                        'post_id' => $claim->post_id,
+                        'claim_id' => $claim->id,
+                    ],
                 ]);
                 $claim->post->author->notifications()->create([
                     'id' => (string) Str::uuid(),
@@ -82,6 +89,8 @@ class ClaimReviewController extends Controller
                         'title' => 'A claim is ready for your decision',
                         'body' => 'An administrator approved a claim for '.$claim->post->item_name.'. Confirm whether you agree to hand over the item.',
                         'claim_id' => $claim->id,
+                        'post_id' => $claim->post_id,
+                        'conversation_id' => $conversation->id,
                     ],
                 ]);
             } else {

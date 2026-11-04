@@ -4,10 +4,12 @@ namespace Tests\Feature;
 
 use App\Models\User;
 use App\Models\Category;
+use App\Models\LostSighting;
 use App\Models\Location;
 use App\Models\Post;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Foundation\Vite;
+use Illuminate\Support\Facades\DB;
 use Tests\TestCase;
 
 class AdminPortalPagesTest extends TestCase
@@ -87,6 +89,63 @@ class AdminPortalPagesTest extends TestCase
             ->assertSee('People are listed alphabetically by last name.')
             ->assertSee('Name or email')
             ->assertDontSee('Browse community posts');
+    }
+
+    public function test_lost_item_proof_images_open_in_a_pop_up_viewer(): void
+    {
+        $this->app->make(Vite::class)->useHotFile(storage_path('framework/testing/missing-vite-hot-file'));
+        $admin = User::create([
+            'first_name' => 'Proof',
+            'last_name' => 'Admin',
+            'tmc_id_no' => 'ADMIN-PROOF-VIEWER',
+            'email' => 'admin-proof-viewer@tmc.test',
+            'password' => 'LongTestPassword!123',
+            'role' => 'admin',
+            'status' => 'active',
+            'email_verified_at' => now(),
+        ]);
+        $owner = User::create([
+            'first_name' => 'Proof',
+            'last_name' => 'Owner',
+            'tmc_id_no' => 'USER-PROOF-OWNER',
+            'email' => 'proof-owner@tmc.test',
+            'password' => 'LongTestPassword!123',
+            'role' => 'user',
+            'status' => 'active',
+            'email_verified_at' => now(),
+        ]);
+        $witness = User::create([
+            'first_name' => 'Proof',
+            'last_name' => 'Witness',
+            'tmc_id_no' => 'USER-PROOF-WITNESS',
+            'email' => 'proof-witness@tmc.test',
+            'password' => 'LongTestPassword!123',
+            'role' => 'user',
+            'status' => 'active',
+            'email_verified_at' => now(),
+        ]);
+        $category = Category::create(['name' => 'Proof Category', 'is_active' => true]);
+        $location = Location::create(['name' => 'Proof Location', 'is_active' => true]);
+        $post = $this->createFeedPost($owner, $category, $location, 'lost', 'active', 'Lost Umbrella');
+        LostSighting::create([
+            'post_id' => $post->id,
+            'user_id' => $witness->id,
+            'answer' => 'yes',
+            'evidence_text' => 'Seen near the library entrance.',
+            'evidence_image' => 'proofs/umbrella.jpg',
+            'author_decision' => 'approved',
+            'admin_decision' => 'pending',
+        ]);
+        $proofUrl = url('/api/v1/media?path=proofs%2Fumbrella.jpg');
+
+        $this->actingAs($admin, 'admin')
+            ->get(route('admin.sightings.index'))
+            ->assertOk()
+            ->assertSee('View image')
+            ->assertSee('data-proof-src="'.$proofUrl.'"', false)
+            ->assertSee('proof-image-modal', false)
+            ->assertSee('image-modal-body', false)
+            ->assertDontSee('<img src="'.$proofUrl.'"', false);
     }
 
     public function test_admin_home_counts_found_posts_separately_from_pending_claims(): void
@@ -253,6 +312,20 @@ class AdminPortalPagesTest extends TestCase
 
         $details['email'] = 'new-member@gmail.com';
         $this->post(route('admin.users.store'), $details)
+            ->assertSessionHasErrors('tmc_id_no');
+        $this->assertDatabaseMissing('users', ['tmc_id_no' => 'TMC-NEW-MEMBER']);
+
+        DB::table('tmc_masterlist')->insert([
+            'tmc_id_no' => 'TMC-NEW-MEMBER',
+            'full_name' => 'New Member',
+            'email' => 'new-member@gmail.com',
+            'user_type' => 'other',
+            'user_type_other' => 'Visiting researcher',
+            'department' => 'CCS',
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+        $this->post(route('admin.users.store'), $details)
             ->assertRedirect(route('admin.users.index'));
         $this->assertDatabaseHas('users', [
             'email' => 'new-member@gmail.com',
@@ -260,5 +333,44 @@ class AdminPortalPagesTest extends TestCase
             'user_type_other' => 'Visiting researcher',
             'department' => 'CCS',
         ]);
+    }
+
+    public function test_admin_created_user_details_must_match_the_masterlist(): void
+    {
+        $admin = User::create([
+            'first_name' => 'Portal',
+            'last_name' => 'Admin',
+            'tmc_id_no' => 'ADMIN-MASTERLIST-CHECK',
+            'email' => 'admin-masterlist-check@tmc.test',
+            'password' => 'LongTestPassword!123',
+            'role' => 'admin',
+            'status' => 'active',
+            'email_verified_at' => now(),
+        ]);
+        DB::table('tmc_masterlist')->insert([
+            'tmc_id_no' => 'TMC-MASTERLIST-MEMBER',
+            'full_name' => 'Masterlist Member',
+            'email' => 'masterlist-member@gmail.com',
+            'user_type' => 'student',
+            'user_type_other' => null,
+            'department' => 'CCS',
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+
+        $this->actingAs($admin, 'admin')
+            ->post(route('admin.users.store'), [
+                'first_name' => 'Unlisted',
+                'last_name' => 'Person',
+                'tmc_id_no' => 'TMC-MASTERLIST-MEMBER',
+                'email' => 'masterlist-member@gmail.com',
+                'user_type' => 'student',
+                'department' => 'CCS',
+                'password' => 'LongTestPassword!123',
+                'password_confirmation' => 'LongTestPassword!123',
+            ])
+            ->assertSessionHasErrors('first_name');
+
+        $this->assertDatabaseMissing('users', ['tmc_id_no' => 'TMC-MASTERLIST-MEMBER']);
     }
 }

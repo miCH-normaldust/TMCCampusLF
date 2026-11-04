@@ -1,17 +1,13 @@
-# tmc_campuslf_mobile
+# TMC CampusLF Mobile
 
-A new Flutter project.
+## Connecting to the local Laravel API
 
-## Getting Started
+The Android emulator uses `http://10.0.2.2:8000/api/v1` by default. For a USB-connected Android phone, forward the API port from the phone to the development computer and override the URL:
 
-This project is a starting point for a Flutter application.
+```powershell
+cd C:\xampp\htdocs\campuslfproject\mobile
+adb reverse tcp:8000 tcp:8000
+flutter run -d <device-id> --dart-define=CAMPUSLF_API_URL=http://127.0.0.1:8000/api/v1
+```
 
-A few resources to get you started if this is your first Flutter project:
-
-- [Learn Flutter](https://docs.flutter.dev/get-started/learn-flutter)
-- [Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Flutter learning resources](https://docs.flutter.dev/reference/learning-resources)
-
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
+Start the Laravel API on the computer at port 8000 before launching the app. Local HTTP traffic is permitted only for Android debug builds; release builds continue to block cleartext traffic.

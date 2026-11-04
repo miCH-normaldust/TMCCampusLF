@@ -12,6 +12,7 @@ use App\Http\Controllers\Admin\PostRetrievalRequestController;
 use App\Http\Controllers\Admin\ActivityController;
 use App\Http\Controllers\Admin\SettingsController;
 use App\Http\Controllers\Admin\SightingReviewController;
+use App\Http\Controllers\Admin\SupportConversationController;
 use App\Http\Controllers\Admin\UserController;
 use App\Http\Middleware\TrackAdminRouteUsage;
 use Illuminate\Support\Facades\Route;
@@ -36,6 +37,8 @@ Route::prefix('admin')->name('admin.')->middleware(['auth:admin', 'role:admin', 
     Route::post('/reports/{report}', [ModerationController::class, 'decide'])->name('reports.decide');
     Route::get('/feedback', [FeedbackController::class, 'index'])->name('feedback.index');
     Route::patch('/feedback/{feedback}', [FeedbackController::class, 'update'])->name('feedback.update');
+    Route::get('/chats', [SupportConversationController::class, 'index'])->name('chats.index');
+    Route::post('/chats/{conversation}/messages', [SupportConversationController::class, 'send'])->name('chats.send');
     Route::get('/users', [UserController::class, 'index'])->name('users.index');
     Route::post('/users', [UserController::class, 'store'])->name('users.store');
     Route::patch('/users/{user}/status', [UserController::class, 'setStatus'])->name('users.status');

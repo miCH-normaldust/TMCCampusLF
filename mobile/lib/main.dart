@@ -30,13 +30,47 @@ class _CampusLfAppState extends State<CampusLfApp> {
   String? _firstName;
   bool _signedIn = false;
   bool _forceSignedOut = false;
+  bool _themeReady = false;
   ThemeMode _themeMode = ThemeMode.light;
 
-  void _toggleTheme() {
+  @override
+  void initState() {
+    super.initState();
+    _restoreTheme();
+  }
+
+  Future<void> _restoreTheme() async {
+    try {
+      final savedTheme = await _tokens.readThemeMode();
+      if (!mounted) return;
+      setState(() {
+        _themeMode = savedTheme == 'dark' ? ThemeMode.dark : ThemeMode.light;
+        _themeReady = true;
+      });
+    } catch (error) {
+      debugPrint('Could not restore the saved theme preference: $error');
+      if (mounted) setState(() => _themeReady = true);
+    }
+  }
+
+  Future<void> _toggleTheme() async {
+    final nextMode = _themeMode == ThemeMode.light
+        ? ThemeMode.dark
+        : ThemeMode.light;
+    try {
+      await _tokens.saveThemeMode(nextMode == ThemeMode.dark);
+    } catch (error) {
+      debugPrint('Could not save the theme preference: $error');
+      if (mounted) {
+        ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+          const SnackBar(content: Text('Could not save the theme preference.')),
+        );
+      }
+      return;
+    }
+    if (!mounted) return;
     setState(() {
-      _themeMode = _themeMode == ThemeMode.light
-          ? ThemeMode.dark
-          : ThemeMode.light;
+      _themeMode = nextMode;
     });
   }
 
@@ -73,7 +107,9 @@ class _CampusLfAppState extends State<CampusLfApp> {
       darkTheme: CampusTheme.build(dark: true),
       themeMode: _themeMode,
       debugShowCheckedModeBanner: false,
-      home: _signedIn
+      home: !_themeReady
+          ? const Scaffold(body: Center(child: CircularProgressIndicator()))
+          : _signedIn
           ? CampusHomeScreen(
               api: _api,
               auth: _auth,
@@ -83,7 +119,13 @@ class _CampusLfAppState extends State<CampusLfApp> {
               onSignedOut: _handleSignedOut,
             )
           : _forceSignedOut
-          ? AuthScreen(api: _api, auth: _auth, onSignedIn: _handleSignedIn)
+          ? AuthScreen(
+              api: _api,
+              auth: _auth,
+              isDarkMode: _themeMode == ThemeMode.dark,
+              onToggleTheme: _toggleTheme,
+              onSignedIn: _handleSignedIn,
+            )
           : FutureBuilder<String?>(
               future: _savedToken,
               builder: (context, snapshot) {
@@ -102,7 +144,6 @@ class _CampusLfAppState extends State<CampusLfApp> {
                   );
                 }
                 if (snapshot.data != null) {
-                  _signedIn = true;
                   return CampusHomeScreen(
                     api: _api,
                     auth: _auth,
@@ -115,6 +156,8 @@ class _CampusLfAppState extends State<CampusLfApp> {
                 return AuthScreen(
                   api: _api,
                   auth: _auth,
+                  isDarkMode: _themeMode == ThemeMode.dark,
+                  onToggleTheme: _toggleTheme,
                   onSignedIn: _handleSignedIn,
                 );
               },

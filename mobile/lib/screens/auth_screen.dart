@@ -10,12 +10,16 @@ class AuthScreen extends StatefulWidget {
   const AuthScreen({
     required this.api,
     required this.auth,
+    required this.isDarkMode,
+    required this.onToggleTheme,
     required this.onSignedIn,
     super.key,
   });
 
   final ApiClient api;
   final AuthService auth;
+  final bool isDarkMode;
+  final VoidCallback onToggleTheme;
   final void Function(String firstName) onSignedIn;
 
   @override
@@ -70,7 +74,12 @@ class _AuthScreenState extends State<AuthScreen> {
   Future<void> _register() async {
     final result = await Navigator.of(context).push<_RegistrationResult>(
       MaterialPageRoute(
-        builder: (_) => RegistrationScreen(api: widget.api, auth: widget.auth),
+        builder: (_) => RegistrationScreen(
+          api: widget.api,
+          auth: widget.auth,
+          isDarkMode: widget.isDarkMode,
+          onToggleTheme: widget.onToggleTheme,
+        ),
       ),
     );
     if (result == null || !mounted) return;
@@ -83,8 +92,12 @@ class _AuthScreenState extends State<AuthScreen> {
   Future<void> _forgotPassword() async {
     final message = await Navigator.of(context).push<String>(
       MaterialPageRoute(
-        builder: (_) =>
-            ForgotPasswordScreen(api: widget.api, auth: widget.auth),
+        builder: (_) => ForgotPasswordScreen(
+          api: widget.api,
+          auth: widget.auth,
+          isDarkMode: widget.isDarkMode,
+          onToggleTheme: widget.onToggleTheme,
+        ),
       ),
     );
     if (message != null && mounted) {
@@ -109,7 +122,16 @@ class _AuthScreenState extends State<AuthScreen> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    const _BrandMark(),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        const _BrandMark(),
+                        _ThemeToggle(
+                          isDarkMode: widget.isDarkMode,
+                          onToggle: widget.onToggleTheme,
+                        ),
+                      ],
+                    ),
                     const SizedBox(height: 28),
                     Text(
                       'Welcome to CampusLF',
@@ -134,6 +156,8 @@ class _AuthScreenState extends State<AuthScreen> {
                                         builder: (_) => RegistrationScreen(
                                           api: widget.api,
                                           auth: widget.auth,
+                                          isDarkMode: widget.isDarkMode,
+                                          onToggleTheme: widget.onToggleTheme,
                                           initialEmail: _email.text.trim(),
                                         ),
                                       ),
@@ -240,11 +264,15 @@ class ForgotPasswordScreen extends StatefulWidget {
   const ForgotPasswordScreen({
     required this.api,
     required this.auth,
+    required this.isDarkMode,
+    required this.onToggleTheme,
     super.key,
   });
 
   final ApiClient api;
   final AuthService auth;
+  final bool isDarkMode;
+  final VoidCallback onToggleTheme;
 
   @override
   State<ForgotPasswordScreen> createState() => _ForgotPasswordScreenState();
@@ -257,6 +285,7 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
   final _confirm = TextEditingController();
   int _step = 0;
   bool _busy = false;
+  bool _localOtpFallback = false;
   String? _resetToken;
   String? _message;
   String? _error;
@@ -308,6 +337,7 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
           setState(() {
             _step = 1;
             _message = message;
+            _localOtpFallback = _usesLocalOtpFallback(message);
           });
         }
       } else if (_step == 1) {
@@ -348,7 +378,12 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
     });
     try {
       final message = await widget.auth.requestPasswordReset(_email.text);
-      if (mounted) setState(() => _message = message);
+      if (mounted) {
+        setState(() {
+          _message = message;
+          _localOtpFallback = _usesLocalOtpFallback(message);
+        });
+      }
     } on DioException catch (error) {
       if (mounted) setState(() => _error = widget.api.errorMessage(error));
     } finally {
@@ -356,17 +391,30 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
     }
   }
 
+  bool _usesLocalOtpFallback(String message) =>
+      message.contains('Gmail delivery is unavailable') ||
+      message.contains('Local mail mode is enabled');
+
   @override
   Widget build(BuildContext context) {
     final titles = ['Reset password', 'Verify code', 'Choose new password'];
     return Scaffold(
-      appBar: AppBar(title: Text(titles[_step])),
+      appBar: AppBar(
+        title: Text(titles[_step]),
+        actions: [
+          _ThemeToggle(
+            isDarkMode: widget.isDarkMode,
+            onToggle: widget.onToggleTheme,
+          ),
+        ],
+      ),
       body: SafeArea(
         child: ListView(
           padding: const EdgeInsets.all(20),
           children: [
             if (_error != null) _Notice(text: _error!, success: false),
-            if (_message != null) _Notice(text: _message!, success: true),
+            if (_message != null)
+              _Notice(text: _message!, success: !_localOtpFallback),
             if (_step == 0) ...[
               const Text('Enter the Gmail address connected to your account.'),
               const SizedBox(height: 16),
@@ -377,7 +425,11 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
                 decoration: const InputDecoration(labelText: 'Gmail address'),
               ),
             ] else if (_step == 1) ...[
-              Text('Enter the six-digit code sent to ${_email.text.trim()}.'),
+              Text(
+                _localOtpFallback
+                    ? 'No email was sent. For local testing, find the latest password reset code in web/storage/logs/laravel.log.'
+                    : 'Enter the six-digit code sent to ${_email.text.trim()}.',
+              ),
               const SizedBox(height: 16),
               TextField(
                 controller: _code,
@@ -435,12 +487,16 @@ class RegistrationScreen extends StatefulWidget {
   const RegistrationScreen({
     required this.api,
     required this.auth,
+    required this.isDarkMode,
+    required this.onToggleTheme,
     this.initialEmail,
     super.key,
   });
 
   final ApiClient api;
   final AuthService auth;
+  final bool isDarkMode;
+  final VoidCallback onToggleTheme;
   final String? initialEmail;
 
   @override
@@ -466,6 +522,7 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
   bool _busy = false;
   bool _captchaLoading = false;
   bool _otpSent = false;
+  bool _localOtpFallback = false;
   bool _showPassword = false;
   bool _showConfirmPassword = false;
   String? _message;
@@ -507,6 +564,7 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
       _captchaToken = '';
       _captchaQuestion = 'Loading security check…';
       _captchaAnswer.clear();
+      _error = null;
     });
     try {
       final challenge = await widget.auth.captcha();
@@ -517,7 +575,12 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
         });
       }
     } on DioException catch (error) {
-      if (mounted) setState(() => _error = widget.api.errorMessage(error));
+      if (mounted) {
+        setState(() {
+          _captchaQuestion = 'Unavailable — tap refresh';
+          _error = widget.api.errorMessage(error);
+        });
+      }
     } finally {
       if (mounted) setState(() => _captchaLoading = false);
     }
@@ -574,6 +637,7 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
         setState(() {
           _otpSent = true;
           _message = message;
+          _localOtpFallback = _usesLocalOtpFallback(message);
         });
       } else {
         final message = await widget.auth.verifyOtp(
@@ -600,11 +664,21 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
   String? _required(String? value) =>
       value == null || value.trim().isEmpty ? 'This field is required.' : null;
 
+  bool _usesLocalOtpFallback(String message) =>
+      message.contains('Gmail delivery is unavailable') ||
+      message.contains('Local mail mode is enabled');
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
         title: Text(_otpSent ? 'Verify your email' : 'Create account'),
+        actions: [
+          _ThemeToggle(
+            isDarkMode: widget.isDarkMode,
+            onToggle: widget.onToggleTheme,
+          ),
+        ],
       ),
       body: SafeArea(
         child: Form(
@@ -614,8 +688,10 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
             children: [
               if (_error != null) _Notice(text: _error!, success: false),
               if (_otpSent) ...[
-                const Text(
-                  'Enter the six-digit code sent to your TMC email. Unmatched masterlist records wait for administrator approval.',
+                Text(
+                  _localOtpFallback
+                      ? 'No email was sent. For local testing, find the latest verification code in web/storage/logs/laravel.log.'
+                      : 'Enter the six-digit code sent to your TMC email. Unmatched masterlist records wait for administrator approval.',
                 ),
                 const SizedBox(height: 20),
                 TextFormField(
@@ -626,7 +702,8 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
                     labelText: 'Verification code',
                   ),
                 ),
-                if (_message != null) _Notice(text: _message!, success: true),
+                if (_message != null)
+                  _Notice(text: _message!, success: !_localOtpFallback),
                 TextButton(
                   onPressed: _busy
                       ? null
@@ -641,7 +718,12 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
                               _email.text,
                             );
                             if (mounted) {
-                              setState(() => _message = message);
+                              setState(() {
+                                _message = message;
+                                _localOtpFallback = _usesLocalOtpFallback(
+                                  message,
+                                );
+                              });
                             }
                           } on DioException catch (error) {
                             if (mounted) {
@@ -855,6 +937,22 @@ class _BrandMark extends StatelessWidget {
           style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
         ),
       ],
+    );
+  }
+}
+
+class _ThemeToggle extends StatelessWidget {
+  const _ThemeToggle({required this.isDarkMode, required this.onToggle});
+
+  final bool isDarkMode;
+  final VoidCallback onToggle;
+
+  @override
+  Widget build(BuildContext context) {
+    return IconButton(
+      tooltip: isDarkMode ? 'Switch to light mode' : 'Switch to dark mode',
+      onPressed: onToggle,
+      icon: Icon(isDarkMode ? Icons.light_mode : Icons.dark_mode),
     );
   }
 }
