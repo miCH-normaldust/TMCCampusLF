@@ -24,7 +24,7 @@ Route::prefix('v1')->group(function (): void {
     Route::post('/forgot-password/reset', [AuthController::class, 'resetPassword'])->middleware('throttle:5,1');
     Route::post('/login', [AuthController::class, 'login'])->middleware('throttle:5,1');
     Route::get('/catalog', [CatalogController::class, 'index']);
-    Route::get('/media', [PublicMediaController::class, 'show']);
+    Route::get('/media', [PublicMediaController::class, 'show'])->name('api.media');
     Route::post('/posts/similar', [PostController::class, 'similar'])->middleware('throttle:15,1');
     Route::get('/posts/{post}', [PostController::class, 'show']);
     Route::get('/posts/{post}/comments', [InteractionController::class, 'comments']);
@@ -75,6 +75,7 @@ Route::prefix('v1')->group(function (): void {
         Route::post('/conversations/{conversation}/decline', [ConversationController::class, 'declineRequest']);
         Route::post('/conversations/{conversation}/handover', [ConversationController::class, 'createHandover']);
         Route::post('/handovers/{handover}/confirm', [ConversationController::class, 'confirmHandover']);
+        Route::post('/handovers/{handover}/reschedule', [ConversationController::class, 'requestHandoverReschedule']);
         Route::get('/handovers', [ConversationController::class, 'handovers']);
         Route::post('/sightings/{sighting}/handover', [ConversationController::class, 'startSightingHandover']);
     });

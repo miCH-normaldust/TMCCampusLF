@@ -29,6 +29,11 @@ Route::prefix('admin')->name('admin.')->middleware(['auth:admin', 'role:admin', 
     Route::get('/claims/{claim}', [ClaimReviewController::class, 'show'])->name('claims.show');
     Route::post('/claims/{claim}', [ClaimReviewController::class, 'decide'])->name('claims.decide');
     Route::get('/handovers', [HandoverController::class, 'index'])->name('handovers.index');
+    Route::post('/handovers/{handover}/approve', [HandoverController::class, 'approve'])->name('handovers.approve');
+    Route::post('/handovers/{handover}/schedule', [HandoverController::class, 'schedule'])->name('handovers.schedule');
+    Route::post('/handovers/{handover}/reschedule', [HandoverController::class, 'decideReschedule'])->name('handovers.reschedule');
+    Route::post('/handovers/{handover}/complete', [HandoverController::class, 'complete'])->name('handovers.complete');
+    Route::get('/handovers/{handover}/receipt', [HandoverController::class, 'receipt'])->name('handovers.receipt');
     Route::get('/handovers/history', [HandoverController::class, 'history'])->name('handovers.history');
     Route::get('/handovers/history/{handover}', [HandoverController::class, 'historyShow'])->name('handovers.history.show');
     Route::post('/retrieval-requests/{retrievalRequest}', [PostRetrievalRequestController::class, 'decide'])->name('retrieval-requests.decide');

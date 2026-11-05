@@ -73,7 +73,7 @@ Start the Laravel API first. The Flutter app's default Android-emulator API URL 
 .\scripts\run-flutter-android.ps1
 ```
 
-The script launches the `Medium_Phone` AVD, waits for Android to finish booting, fetches Flutter dependencies, and runs the app in debug mode. In VS Code, use **Terminal → Run Task → CampusLF: Run Flutter on Android**. Alternatively, start the emulator in Android Studio and run `flutter run --debug` from `mobile/`.
+The script uses a single connected Android device when available (including a USB-connected phone), otherwise launches the `Medium_Phone` AVD. It waits for Android to finish booting, checks the local API, bridges port 8000, fetches Flutter dependencies, and runs the app in debug mode. Pass `-DeviceId <device-id>` when more than one device is connected. In VS Code, use **Terminal → Run Task → CampusLF: Run Flutter on Android**. Alternatively, start the emulator in Android Studio and run `flutter run --debug` from `mobile/`.
 
 On the first Android build, Gradle may download the Android SDK Platforms 35/36, NDK `28.2.13676358`, and CMake `3.22.1`. Keep the Android SDK licenses accepted and allow those initial downloads to finish before retrying a build.
 

@@ -4,12 +4,17 @@ namespace Tests\Feature;
 
 use App\Models\User;
 use App\Models\Category;
+use App\Models\ClaimRequest;
 use App\Models\LostSighting;
 use App\Models\Location;
 use App\Models\Post;
+use App\Models\Report;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Foundation\Vite;
+use Illuminate\Http\Request;
+use Illuminate\Session\TokenMismatchException;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Contracts\Debug\ExceptionHandler;
 use Tests\TestCase;
 
 class AdminPortalPagesTest extends TestCase
@@ -28,6 +33,43 @@ class AdminPortalPagesTest extends TestCase
             ->assertSee('campuslf-admin-theme')
             ->assertDontSee('#7a0f18')
             ->assertDontSee('#a31621');
+    }
+
+    public function test_expired_admin_form_redirects_to_login_instead_of_showing_page_expired(): void
+    {
+        $request = Request::create('/admin/logout', 'POST');
+        $response = $this->app->make(ExceptionHandler::class)
+            ->render($request, new TokenMismatchException('CSRF token mismatch.'));
+
+        $this->assertSame(route('admin.login'), $response->headers->get('Location'));
+        $this->assertSame(
+            'Your admin session expired. Please sign in again.',
+            $this->app->make('session')->driver()->get('status'),
+        );
+    }
+
+    public function test_authenticated_admin_can_still_log_out_with_post(): void
+    {
+        $admin = User::create([
+            'first_name' => 'Portal',
+            'last_name' => 'Admin',
+            'tmc_id_no' => 'ADMIN-LOGOUT',
+            'email' => 'admin-logout@tmc.test',
+            'password' => 'LongTestPassword!123',
+            'role' => 'admin',
+            'status' => 'active',
+            'email_verified_at' => now(),
+        ]);
+
+        $this->actingAs($admin, 'admin')
+            ->post(route('admin.logout'))
+            ->assertRedirect(route('admin.login'));
+
+        $this->assertGuest('admin');
+        $this->assertDatabaseHas('activity_logs', [
+            'user_id' => $admin->id,
+            'event' => 'admin_logout',
+        ]);
     }
 
     public function test_new_admin_pages_render_for_an_authenticated_admin(): void
@@ -148,7 +190,7 @@ class AdminPortalPagesTest extends TestCase
             ->assertDontSee('<img src="'.$proofUrl.'"', false);
     }
 
-    public function test_admin_home_counts_found_posts_separately_from_pending_claims(): void
+    public function test_admin_home_counts_posts_and_claims_for_their_destination_pages(): void
     {
         $admin = User::create([
             'first_name' => 'Found',
@@ -162,14 +204,86 @@ class AdminPortalPagesTest extends TestCase
         ]);
         $category = Category::create(['name' => 'Found Count Category', 'is_active' => true]);
         $location = Location::create(['name' => 'Found Count Location', 'is_active' => true]);
-        $this->createFeedPost($admin, $category, $location, 'found', 'active', 'First Found Post');
+        $foundPost = $this->createFeedPost($admin, $category, $location, 'found', 'active', 'First Found Post');
+        $this->createFeedPost($admin, $category, $location, 'lost', 'active', 'First Lost Post');
+        $claimant = User::create([
+            'first_name' => 'TMC',
+            'last_name' => 'Claimant',
+            'tmc_id_no' => 'TMC-COUNT-CLAIMANT',
+            'email' => 'claimant-count@tmc.test',
+            'password' => 'LongTestPassword!123',
+            'role' => 'user',
+            'status' => 'active',
+            'email_verified_at' => now(),
+        ]);
+        ClaimRequest::create([
+            'post_id' => $foundPost->id,
+            'claimant_id' => $claimant->id,
+            'answers' => ['private answer'],
+            'attempt_no' => 1,
+            'status' => 'approved',
+            'author_decision' => 'pending',
+        ]);
 
         $this->actingAs($admin, 'admin')
             ->get(route('admin.dashboard'))
             ->assertOk()
             ->assertSee('<small>Found item posts</small><strong>1</strong>', false)
             ->assertSee(route('admin.community-feed.index', ['type' => 'found']), false)
-            ->assertSee('<small>Found item claims</small><strong>0</strong>', false);
+            ->assertSee('<small>Lost item posts</small><strong>1</strong>', false)
+            ->assertSee(route('admin.community-feed.index', ['type' => 'lost']), false)
+            ->assertSee('<small>Found item claims</small><strong>1</strong>', false);
+    }
+
+    public function test_deleted_report_actions_remain_available_in_report_history(): void
+    {
+        $admin = User::create([
+            'first_name' => 'Report',
+            'last_name' => 'Admin',
+            'tmc_id_no' => 'ADMIN-REPORT-HISTORY',
+            'email' => 'admin-report-history@tmc.test',
+            'password' => 'LongTestPassword!123',
+            'role' => 'admin',
+            'status' => 'active',
+            'email_verified_at' => now(),
+        ]);
+        $reporter = User::create([
+            'first_name' => 'Report',
+            'last_name' => 'Member',
+            'tmc_id_no' => 'TMC-REPORT-MEMBER',
+            'email' => 'report-member@tmc.test',
+            'password' => 'LongTestPassword!123',
+            'role' => 'user',
+            'status' => 'active',
+            'email_verified_at' => now(),
+        ]);
+        $category = Category::create(['name' => 'Report History Category', 'is_active' => true]);
+        $location = Location::create(['name' => 'Report History Location', 'is_active' => true]);
+        $post = $this->createFeedPost($reporter, $category, $location, 'found', 'active', 'Removed report post');
+        $report = Report::create([
+            'post_id' => $post->id,
+            'reporter_id' => $reporter->id,
+            'reason' => 'This item should not be listed.',
+            'status' => 'pending',
+        ]);
+
+        $this->actingAs($admin, 'admin')
+            ->post(route('admin.reports.decide', $report), [
+                'action' => 'delete',
+                'reason' => 'Confirmed prohibited listing.',
+            ])->assertRedirect();
+
+        $this->assertDatabaseHas('reports', [
+            'id' => $report->id,
+            'post_id' => null,
+            'status' => 'actioned',
+            'action' => 'delete',
+        ]);
+        $this->get(route('admin.reports.index', ['status' => 'actioned']))
+            ->assertOk()
+            ->assertSee('Post no longer available')
+            ->assertSee('Confirmed prohibited listing.')
+            ->assertSee('Delete');
     }
 
     public function test_admin_home_shortcuts_keep_the_requested_order(): void
@@ -194,6 +308,8 @@ class AdminPortalPagesTest extends TestCase
             'posts_per_day' => 5,
             'claims_per_day' => 5,
             'claim_attempts' => 3,
+            'proof_attempts' => 3,
+            'handover_reschedule_attempts' => 2,
             'report_threshold' => 3,
             'archive_days' => 30,
             'comments_per_day' => 30,

@@ -12,6 +12,7 @@ use App\Support\PublicMediaUrl;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Crypt;
 use Illuminate\Support\Str;
 
 class ConversationController extends Controller
@@ -327,6 +328,7 @@ class ConversationController extends Controller
             'sighting.post.author:id,first_name',
             'sighting.user:id,first_name',
             'sighting.conversation:id,sighting_id',
+            'location:id,name,description,operating_hours',
         ])
             ->where(function ($query) use ($user): void {
                 $query->whereHas('claimRequest', function ($claim) use ($user): void {
@@ -366,11 +368,27 @@ class ConversationController extends Controller
                         ?? $sighting?->conversation?->id,
                     'owner_confirmed_at' => $handover->owner_confirmed_at,
                     'finder_confirmed_at' => $handover->finder_confirmed_at,
+                    'admin_approved_at' => $handover->admin_approved_at,
                     'my_confirmation_at' => $isOwner
                         ? $handover->owner_confirmed_at
                         : $handover->finder_confirmed_at,
                     'completed' => $handover->owner_confirmed_at !== null
-                        && $handover->finder_confirmed_at !== null,
+                        && $handover->finder_confirmed_at !== null
+                        && $handover->status === 'completed',
+                    'status' => $handover->status,
+                    'scheduled_at' => $handover->scheduled_at,
+                    'location' => $handover->location?->name,
+                    'location_description' => $handover->location?->description,
+                    'receipt_code' => $handover->code_encrypted !== null
+                        && $handover->status === 'scheduled'
+                            ? Crypt::decryptString($handover->code_encrypted)
+                            : null,
+                    'reschedule_attempts' => $handover->reschedule_attempts,
+                    'reschedule_limit' => (int) DB::table('settings')
+                        ->where('key', 'handover_reschedule_attempts')
+                        ->value('value') ?: 2,
+                    'requested_date' => $handover->requested_date?->toDateString(),
+                    'reschedule_reason' => $handover->reschedule_reason,
                 ];
             });
 
@@ -394,7 +412,7 @@ class ConversationController extends Controller
             'id' => $handover->id,
             'owner_confirmed_at' => $handover->owner_confirmed_at,
             'finder_confirmed_at' => $handover->finder_confirmed_at,
-            'message' => 'Handover is ready. Each participant can confirm the exchange in the app.',
+            'message' => 'Handover created. TMC administrators must approve it before both participants can agree.',
         ], $handover->wasRecentlyCreated ? 201 : 200);
     }
 
@@ -414,7 +432,7 @@ class ConversationController extends Controller
             'id' => $handover->id,
             'owner_confirmed_at' => $handover->owner_confirmed_at,
             'finder_confirmed_at' => $handover->finder_confirmed_at,
-            'message' => 'Handover is ready. Each participant can confirm the exchange in the app.',
+            'message' => 'Handover created. TMC administrators must approve it before both participants can agree.',
         ], $handover->wasRecentlyCreated ? 201 : 200);
     }
 
@@ -437,6 +455,12 @@ class ConversationController extends Controller
                 404,
             );
         }
+        abort_unless(
+            $handover->admin_approved_at !== null
+                && in_array($handover->status, ['awaiting_participants', 'awaiting_schedule'], true),
+            409,
+            'TMC administrators must approve the handover before participants can agree.',
+        );
         DB::transaction(function () use ($request, $handover, $claim, $sighting, $conversation): void {
             $locked = Handover::whereKey($handover->id)->lockForUpdate()->firstOrFail();
             $ownerId = $claim?->claimant_id ?? $sighting?->post?->user_id;
@@ -451,19 +475,91 @@ class ConversationController extends Controller
             }
             $locked = $locked->fresh();
             if ($locked->owner_confirmed_at && $locked->finder_confirmed_at) {
-                ($claim?->post ?? $sighting?->post)?->update(['status' => 'retrieved']);
-                $conversation?->update(['closed_at' => now()]);
+                $locked->update(['status' => 'awaiting_schedule']);
             }
         });
 
         return response()->json([
-            'message' => $handover->fresh()->owner_confirmed_at !== null && $handover->fresh()->finder_confirmed_at !== null
-                ? 'Both participants confirmed. The item is marked as retrieved.'
-                : 'Your confirmation was recorded. Waiting for the other participant.',
-            'retrieved' => $conversation
-                ? $conversation->fresh()->closed_at !== null
-                : $handover->fresh()->owner_confirmed_at !== null && $handover->fresh()->finder_confirmed_at !== null,
+            'message' => $handover->fresh()->status === 'awaiting_schedule'
+                ? 'Both participants agreed. TMC administrators will now schedule the handover.'
+                : 'Your agreement was recorded. Waiting for the other participant.',
+            'status' => $handover->fresh()->status,
+            'retrieved' => false,
         ]);
+    }
+
+    public function requestHandoverReschedule(
+        Request $request,
+        Handover $handover,
+        TextMasker $masker,
+    ): JsonResponse {
+        $claim = $handover->claimRequest;
+        $sighting = $handover->sighting;
+        $ownerId = $claim?->claimant_id ?? $sighting?->post?->user_id;
+        $finderId = $claim?->post?->user_id ?? $sighting?->user_id;
+        abort_unless(in_array($request->user()->id, [$ownerId, $finderId], true), 404);
+        abort_unless($handover->status === 'scheduled', 409, 'Only a scheduled handover can be rescheduled.');
+
+        $data = $request->validate([
+            'requested_date' => ['required', 'date', 'after:today'],
+            'reason' => ['required', 'string', 'max:1000'],
+        ]);
+        $limit = (int) DB::table('settings')->where('key', 'handover_reschedule_attempts')->value('value') ?: 2;
+        $failed = DB::transaction(function () use ($request, $handover, $data, $limit, $masker, $ownerId, $finderId): bool {
+            $locked = Handover::whereKey($handover->id)->lockForUpdate()->firstOrFail();
+            abort_unless($locked->status === 'scheduled', 409, 'This handover is no longer scheduled.');
+            $attempts = $locked->reschedule_attempts + 1;
+            $exhausted = $attempts >= $limit;
+            $locked->update([
+                'reschedule_attempts' => $attempts,
+                'status' => $exhausted ? 'unsuccessful' : 'reschedule_requested',
+                'reschedule_requested_at' => now(),
+                'requested_date' => $data['requested_date'],
+                'reschedule_reason' => $masker->mask($data['reason']),
+                'unsuccessful_at' => $exhausted ? now() : null,
+                'failure_reason' => $exhausted
+                    ? 'The reschedule attempt limit was reached.'
+                    : null,
+            ]);
+            if ($exhausted) {
+                ($locked->claimRequest?->post ?? $locked->sighting?->post)?->update(['status' => 'active']);
+            }
+
+            $participants = User::whereIn('id', [$ownerId, $finderId])->get();
+            foreach ($participants as $participant) {
+                $participant->notifications()->create([
+                    'id' => (string) Str::uuid(),
+                    'type' => $exhausted ? 'handover_unsuccessful' : 'handover_reschedule_requested',
+                    'data' => [
+                        'title' => $exhausted ? 'Handover ended' : 'Reschedule request sent',
+                        'body' => $exhausted
+                            ? 'The handover could not be rescheduled within the allowed attempts. The item is active again.'
+                            : 'A reschedule request was sent to TMC administrators.',
+                        'handover_id' => $locked->id,
+                    ],
+                ]);
+            }
+            foreach (User::where('role', 'admin')->where('status', 'active')->get() as $admin) {
+                $admin->notifications()->create([
+                    'id' => (string) Str::uuid(),
+                    'type' => $exhausted ? 'handover_unsuccessful' : 'handover_reschedule_requested',
+                    'data' => [
+                        'title' => $exhausted ? 'Handover attempt limit reached' : 'Handover reschedule requested',
+                        'body' => $data['reason'],
+                        'handover_id' => $locked->id,
+                    ],
+                ]);
+            }
+
+            return $exhausted;
+        });
+
+        return response()->json([
+            'message' => $failed
+                ? 'The reschedule limit was reached. This handover is unsuccessful and the post is active again.'
+                : 'Your reschedule request was sent to TMC administrators.',
+            'status' => $failed ? 'unsuccessful' : 'reschedule_requested',
+        ], 201);
     }
 
     private function authorizeParticipant(Conversation $conversation, User $user): void

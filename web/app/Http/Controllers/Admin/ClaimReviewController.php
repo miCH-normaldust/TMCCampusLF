@@ -22,6 +22,7 @@ class ClaimReviewController extends Controller
                 'post.location:id,name',
                 'post.verificationQuestions',
                 'claimant:id,first_name,last_name,tmc_id_no,email',
+                'evidenceImages',
             ]),
         ]);
     }

@@ -22,6 +22,9 @@ class PublicMediaController extends Controller
 
         abort_if(str_contains($path, '..'), 404);
         abort_unless(Storage::disk('public')->exists($path), 404);
+        if (str_starts_with($path, 'posts/')) {
+            abort_unless($request->hasValidSignature(false), 404);
+        }
 
         return Storage::disk('public')->response($path, basename($path), [], 'inline');
     }

@@ -28,6 +28,8 @@ class SettingsController extends Controller
             'posts_per_day' => ['required', 'integer', 'min:1', 'max:50'],
             'claims_per_day' => ['required', 'integer', 'min:1', 'max:50'],
             'claim_attempts' => ['required', 'integer', 'min:1', 'max:10'],
+            'proof_attempts' => ['required', 'integer', 'min:1', 'max:10'],
+            'handover_reschedule_attempts' => ['required', 'integer', 'min:1', 'max:10'],
             'report_threshold' => ['required', 'integer', 'min:1', 'max:100'],
             'archive_days' => ['required', 'integer', 'min:1', 'max:60'],
             'comments_per_day' => ['required', 'integer', 'min:1', 'max:200'],

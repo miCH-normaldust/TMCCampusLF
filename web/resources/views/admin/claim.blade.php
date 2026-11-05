@@ -18,6 +18,12 @@
             @foreach ($claim->answers as $index => $answer)
                 <p><strong>Response {{ $index + 1 }}:</strong><br>{{ $answer }}</p>
             @endforeach
+            <h3>Photos supplied by the claimant</h3>
+            @forelse ($claim->evidenceImages as $image)
+                <p><a href="{{ \App\Support\PublicMediaUrl::forPath($image->path) }}" target="_blank" rel="noopener">View claimant photo {{ $loop->iteration }}</a></p>
+            @empty
+                <p class="muted">No claimant photos were attached.</p>
+            @endforelse
         </article>
     </section>
     <section class="section card">

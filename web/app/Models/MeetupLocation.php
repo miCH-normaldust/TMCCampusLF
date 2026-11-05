@@ -1,0 +1,12 @@
+<?php
+
+namespace App\Models;
+
+use Illuminate\Database\Eloquent\Model;
+
+class MeetupLocation extends Model
+{
+    protected $table = 'meetup_locations';
+
+    protected $fillable = ['name', 'description', 'operating_hours', 'is_active'];
+}

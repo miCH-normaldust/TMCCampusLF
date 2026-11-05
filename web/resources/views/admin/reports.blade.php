@@ -11,6 +11,20 @@
         </div>
     </div>
 
+    <section class="card section">
+        <form class="filter-form compact-filter" method="get" action="{{ route('admin.reports.index') }}">
+            <label>Report history
+                <select name="status">
+                    <option value="pending" @selected($status === 'pending')>Pending review</option>
+                    <option value="dismissed" @selected($status === 'dismissed')>Dismissed</option>
+                    <option value="actioned" @selected($status === 'actioned')>Actioned</option>
+                    <option value="all" @selected($status === 'all')>All reports</option>
+                </select>
+            </label>
+            <button class="button" type="submit">Show reports</button>
+        </form>
+    </section>
+
     <section class="reports-list">
         @forelse ($reports as $report)
             @php($post = $report->post)
@@ -18,10 +32,11 @@
                 <div class="report-card-head">
                     <div>
                         <span class="pill">{{ $report->created_at->format('M j, Y g:i A') }}</span>
+                        <span class="pill">{{ ucfirst($report->status) }}{{ $report->action ? ' · '.ucfirst($report->action) : '' }}</span>
                         <h2>{{ $post?->item_name ?? 'Post no longer available' }}</h2>
                         <p class="muted">
                             Reported by {{ $report->reporter?->first_name ?? 'Unknown member' }}
-                            @if ($post)
+                            @if ($post && $report->status === 'pending')
                                 · Posted by {{ $post->author?->first_name ?? 'Unknown member' }}
                             @endif
                         </p>
@@ -49,7 +64,9 @@
                         </div>
                     </form>
                 @else
-                    <p class="muted">This report cannot be actioned because the post has been removed.</p>
+                    <p class="muted">
+                        {{ $report->admin_reason ?? ($post ? 'This report has already been reviewed.' : 'The post was removed after moderation.') }}
+                    </p>
                 @endif
             </article>
         @empty

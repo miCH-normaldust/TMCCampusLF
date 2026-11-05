@@ -133,6 +133,9 @@
     <div class="login-brand"><span class="campuslf-brand-mark" aria-hidden="true"><span class="brand-lf">LF</span><img src="{{ asset('images/tmc-logo.png') }}" alt=""></span><strong>TMC CampusLF</strong></div>
     <h1>Admin portal</h1>
     <p class="muted">Sign in with your administrator account.</p>
+    @if (session('status'))
+        <div class="flash" role="status">{{ session('status') }}</div>
+    @endif
     @if ($errors->any())
         <div class="login-error" role="alert">{{ $errors->first() }}</div>
     @endif

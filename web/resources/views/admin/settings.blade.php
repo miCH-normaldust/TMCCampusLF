@@ -17,6 +17,8 @@
                     'posts_per_day' => 'Posts per day',
                     'claims_per_day' => 'Claims per day',
                     'claim_attempts' => 'Claim attempts per item',
+                    'proof_attempts' => 'Proof submissions per item',
+                    'handover_reschedule_attempts' => 'Handover reschedules per item',
                     'report_threshold' => 'Reports before auto-hide',
                     'archive_days' => 'Archive period (1-60 days)',
                     'comments_per_day' => 'Comments per day',

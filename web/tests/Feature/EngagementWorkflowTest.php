@@ -3,14 +3,17 @@
 namespace Tests\Feature;
 
 use App\Models\Category;
+use App\Models\ClaimRequest;
 use App\Models\Conversation;
 use App\Models\Location;
 use App\Models\LostSighting;
 use App\Models\Post;
+use App\Models\PostImage;
 use App\Models\User;
 use App\Models\VerificationQuestion;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\UploadedFile;
+use Illuminate\Support\Facades\Storage;
 use Laravel\Sanctum\Sanctum;
 use Tests\TestCase;
 
@@ -29,8 +32,9 @@ class EngagementWorkflowTest extends TestCase
         ]);
         Sanctum::actingAs($claimant);
 
-        $first = $this->postJson("/api/v1/posts/{$post->id}/claims", [
+        $first = $this->post("/api/v1/posts/{$post->id}/claims", [
             'answers' => ['blue initials'],
+            'evidence_images' => [UploadedFile::fake()->image('ownership.jpg')],
         ])->assertCreated()
             ->assertJsonPath('editable', true);
         $claimId = $first->json('claim_id');
@@ -59,6 +63,56 @@ class EngagementWorkflowTest extends TestCase
             'answers' => ['too late'],
         ])->assertConflict();
         $this->assertDatabaseCount('claim_requests', 1);
+    }
+
+    public function test_claim_resubmissions_stop_at_the_configured_per_item_attempt_limit(): void
+    {
+        \Illuminate\Support\Facades\DB::table('settings')->updateOrInsert(
+            ['key' => 'claim_attempts'],
+            ['value' => '2'],
+        );
+        [$owner, $claimant, $category, $location] = $this->createParticipants();
+        $post = $this->createPost($owner, $category, $location, 'found');
+        VerificationQuestion::create([
+            'post_id' => $post->id,
+            'question' => 'What is written inside?',
+            'answer' => 'Private label',
+        ]);
+        $admin = $this->createUser('Claims', 'Admin', 'claims-limit-admin', 'admin');
+
+        Sanctum::actingAs($claimant);
+        $first = $this->post("/api/v1/posts/{$post->id}/claims", [
+            'answers' => ['blue initials'],
+            'evidence_images' => [UploadedFile::fake()->image('ownership-1.jpg')],
+        ])->assertCreated();
+        $firstId = $first->json('claim_id');
+
+        $this->actingAs($admin, 'admin')
+            ->post(route('admin.claims.decide', $firstId), [
+                'decision' => 'reject',
+                'reason' => 'The evidence does not match.',
+            ])->assertRedirect();
+
+        Sanctum::actingAs($claimant);
+        $second = $this->post("/api/v1/posts/{$post->id}/claims", [
+            'answers' => ['updated blue initials'],
+            'evidence_images' => [UploadedFile::fake()->image('ownership-2.jpg')],
+        ])->assertCreated();
+        $secondId = $second->json('claim_id');
+        $this->assertSame(2, $second->json('attempt_no'));
+
+        $this->actingAs($admin, 'admin')
+            ->post(route('admin.claims.decide', $secondId), [
+                'decision' => 'reject',
+                'reason' => 'The new evidence does not match.',
+            ])->assertRedirect();
+
+        Sanctum::actingAs($claimant);
+        $this->post("/api/v1/posts/{$post->id}/claims", [
+            'answers' => ['third attempt'],
+            'evidence_images' => [UploadedFile::fake()->image('ownership-3.jpg')],
+        ])->assertStatus(429);
+        $this->assertDatabaseCount('claim_requests', 2);
     }
 
     public function test_lost_evidence_is_visible_to_its_owner_and_can_open_an_admin_chat(): void
@@ -145,6 +199,104 @@ class EngagementWorkflowTest extends TestCase
         $this->getJson('/api/v1/handovers')
             ->assertOk()
             ->assertJsonPath('data.0.type', 'lost');
+    }
+
+    public function test_lost_evidence_resubmissions_stop_at_the_configured_per_item_attempt_limit(): void
+    {
+        \Illuminate\Support\Facades\DB::table('settings')->updateOrInsert(
+            ['key' => 'proof_attempts'],
+            ['value' => '2'],
+        );
+        [$owner, $finder, $category, $location] = $this->createParticipants();
+        $post = $this->createPost($owner, $category, $location, 'lost');
+
+        Sanctum::actingAs($finder);
+        $first = $this->post('/api/v1/posts/'.$post->id.'/sightings', [
+            'answer' => 'yes',
+            'evidence_text' => 'I found it by the library.',
+            'evidence_image' => UploadedFile::fake()->image('proof-1.jpg'),
+        ])->assertCreated();
+        $firstId = $first->json('sighting_id');
+        Sanctum::actingAs($owner);
+        $this->patchJson("/api/v1/sightings/{$firstId}", ['decision' => 'reject'])->assertOk();
+
+        Sanctum::actingAs($finder);
+        $second = $this->post('/api/v1/posts/'.$post->id.'/sightings', [
+            'answer' => 'yes',
+            'evidence_text' => 'I found it by the library again.',
+            'evidence_image' => UploadedFile::fake()->image('proof-2.jpg'),
+        ])->assertCreated();
+        $secondId = $second->json('sighting_id');
+        Sanctum::actingAs($owner);
+        $this->patchJson("/api/v1/sightings/{$secondId}", ['decision' => 'reject'])->assertOk();
+
+        Sanctum::actingAs($finder);
+        $this->post('/api/v1/posts/'.$post->id.'/sightings', [
+            'answer' => 'yes',
+            'evidence_text' => 'A third attempt.',
+            'evidence_image' => UploadedFile::fake()->image('proof-3.jpg'),
+        ])->assertStatus(429);
+        $this->assertDatabaseCount('lost_sightings', 2);
+    }
+
+    public function test_owner_post_photos_are_hidden_until_the_matching_evidence_is_approved(): void
+    {
+        Storage::fake('public');
+        [$owner, $member, $category, $location] = $this->createParticipants();
+        $foundPost = $this->createPost($owner, $category, $location, 'found');
+        $foundPath = 'posts/2026/11/found-item.jpg';
+        Storage::disk('public')->put($foundPath, 'found-image');
+        PostImage::create([
+            'post_id' => $foundPost->id,
+            'path' => $foundPath,
+            'alt_text' => 'Found item',
+        ]);
+        $claim = ClaimRequest::create([
+            'post_id' => $foundPost->id,
+            'claimant_id' => $member->id,
+            'answers' => ['a private answer'],
+            'attempt_no' => 1,
+            'status' => 'approved',
+            'author_decision' => 'pending',
+        ]);
+
+        Sanctum::actingAs($member);
+        $this->getJson("/api/v1/posts/{$foundPost->id}")
+            ->assertOk()
+            ->assertJsonPath('data.images', []);
+        $claim->update(['author_decision' => 'approved']);
+        $foundImageUrl = $this->getJson("/api/v1/posts/{$foundPost->id}")
+            ->assertOk()
+            ->json('data.images.0.url');
+        $this->assertIsString($foundImageUrl);
+        $this->withServerVariables(['HTTP_HOST' => 'phone.local'])
+            ->get($foundImageUrl)
+            ->assertOk();
+        $this->get('/api/v1/media?path='.rawurlencode($foundPath))->assertNotFound();
+
+        $lostPost = $this->createPost($owner, $category, $location, 'lost');
+        $lostPath = 'posts/2026/11/lost-item.jpg';
+        Storage::disk('public')->put($lostPath, 'lost-image');
+        PostImage::create([
+            'post_id' => $lostPost->id,
+            'path' => $lostPath,
+            'alt_text' => 'Lost item',
+        ]);
+        $sighting = LostSighting::create([
+            'post_id' => $lostPost->id,
+            'user_id' => $member->id,
+            'answer' => 'yes',
+            'evidence_text' => 'I found the item.',
+            'author_decision' => 'pending',
+            'admin_decision' => 'pending',
+        ]);
+        $this->getJson("/api/v1/posts/{$lostPost->id}")
+            ->assertOk()
+            ->assertJsonPath('data.images', []);
+        $sighting->update(['author_decision' => 'approved']);
+        $this->getJson("/api/v1/posts/{$lostPost->id}")
+            ->assertOk()
+            ->assertJsonCount(1, 'data.images');
     }
 
     public function test_comments_support_one_level_replies_and_reactions_are_heart_toggles(): void

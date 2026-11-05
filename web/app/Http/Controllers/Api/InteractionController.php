@@ -211,25 +211,12 @@ class InteractionController extends Controller
                 abort(409, 'Your evidence has already been approved.');
             }
 
-            $rejectedSightings = $userSightings->filter(function ($s) {
-                return $s->author_decision === 'rejected' || $s->admin_decision === 'rejected';
-            });
-
-            $rejectionsCount = $rejectedSightings->count();
-            if ($rejectionsCount >= 2) {
-                $lastRejected = $rejectedSightings->first();
-                $lastRejectedAt = $lastRejected->updated_at ?? $lastRejected->created_at;
-                $waitPeriodEnd = $lastRejectedAt->copy()->addHours(24);
-
-                if (now()->lt($waitPeriodEnd)) {
-                    $minutesLeft = (int) ceil(now()->diffInSeconds($waitPeriodEnd) / 60);
-                    $hours = floor($minutesLeft / 60);
-                    $mins = $minutesLeft % 60;
-                    $timeStr = $hours > 0 ? "{$hours}h {$mins}m" : "{$mins}m";
-
-                    abort(429, "Your previous evidence attempts were rejected. After 2 rejections, please wait {$timeStr} before submitting evidence again.");
-                }
-            }
+            $attemptLimit = (int) DB::table('settings')->where('key', 'proof_attempts')->value('value') ?: 3;
+            abort_if(
+                $userSightings->count() >= $attemptLimit,
+                429,
+                "You have used all {$attemptLimit} evidence attempts for this item.",
+            );
 
             abort_if(! isset($data['evidence_image']) && $latestSighting?->evidence_image === null, 422, 'An evidence photo is required.');
 
@@ -296,33 +283,9 @@ class InteractionController extends Controller
             return response()->json(['data' => null]);
         }
 
-        $rejectedSightings = $userSightings->filter(function ($s) {
-            return $s->author_decision === 'rejected' || $s->admin_decision === 'rejected';
-        });
-
-        $rejectionsCount = $rejectedSightings->count();
         $isRejected = $sighting->author_decision === 'rejected' || $sighting->admin_decision === 'rejected';
-        $canReapply = false;
-        $waitTimeStr = null;
-
-        if ($isRejected) {
-            if ($rejectionsCount < 2) {
-                $canReapply = true;
-            } else {
-                $lastRejected = $rejectedSightings->first();
-                $lastRejectedAt = $lastRejected->updated_at ?? $lastRejected->created_at;
-                $waitPeriodEnd = $lastRejectedAt->copy()->addHours(24);
-
-                if (now()->gte($waitPeriodEnd)) {
-                    $canReapply = true;
-                } else {
-                    $minutesLeft = (int) ceil(now()->diffInSeconds($waitPeriodEnd) / 60);
-                    $hours = floor($minutesLeft / 60);
-                    $mins = $minutesLeft % 60;
-                    $waitTimeStr = $hours > 0 ? "{$hours}h {$mins}m" : "{$mins}m";
-                }
-            }
-        }
+        $attemptLimit = (int) DB::table('settings')->where('key', 'proof_attempts')->value('value') ?: 3;
+        $canReapply = $isRejected && $userSightings->count() < $attemptLimit;
 
         return response()->json(['data' => [
             'id' => $sighting->id,
@@ -338,9 +301,9 @@ class InteractionController extends Controller
                 && $sighting->admin_decision === 'pending'
                 && $sighting->created_at->gt(now()->subHour()),
             'is_rejected' => $isRejected,
-            'rejections_count' => $rejectionsCount,
+            'attempts_used' => $userSightings->count(),
+            'attempt_limit' => $attemptLimit,
             'can_reapply' => $canReapply,
-            'wait_time_left' => $waitTimeStr,
         ]]);
     }
 

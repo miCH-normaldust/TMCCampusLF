@@ -12,6 +12,21 @@ class Handover extends Model
         'sighting_id',
         'owner_confirmed_at',
         'finder_confirmed_at',
+        'status',
+        'admin_approved_at',
+        'scheduled_at',
+        'reschedule_attempts',
+        'reschedule_requested_at',
+        'requested_date',
+        'reschedule_reason',
+        'completed_at',
+        'unsuccessful_at',
+        'failure_reason',
+        'code_hash',
+        'code_encrypted',
+        'code_lookup',
+        'expires_at',
+        'location_id',
     ];
 
     protected function casts(): array
@@ -19,6 +34,13 @@ class Handover extends Model
         return [
             'owner_confirmed_at' => 'datetime',
             'finder_confirmed_at' => 'datetime',
+            'admin_approved_at' => 'datetime',
+            'scheduled_at' => 'datetime',
+            'reschedule_requested_at' => 'datetime',
+            'requested_date' => 'date',
+            'completed_at' => 'datetime',
+            'unsuccessful_at' => 'datetime',
+            'expires_at' => 'datetime',
         ];
     }
 
@@ -32,4 +54,8 @@ class Handover extends Model
         return $this->belongsTo(LostSighting::class, 'sighting_id');
     }
 
+    public function location(): BelongsTo
+    {
+        return $this->belongsTo(MeetupLocation::class, 'location_id');
+    }
 }

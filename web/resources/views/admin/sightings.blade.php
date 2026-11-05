@@ -63,6 +63,38 @@
     </section>
     <div class="pagination">{{ $sightings->links() }}</div>
 
+    <section class="section card">
+        <h2>Previous lost-item evidence</h2>
+        <p class="muted">Review past owner and administrator decisions, including rejected and approved submissions.</p>
+        <div class="table-wrap">
+            <table>
+                <thead><tr><th>Item</th><th>Submitted by</th><th>Owner decision</th><th>Administrator decision</th><th>Reason</th><th>Photo</th><th>Date</th></tr></thead>
+                <tbody>
+                @forelse ($proofHistory as $proof)
+                    <tr>
+                        <td>{{ $proof->post->item_name }}</td>
+                        <td>{{ $proof->user->first_name }} {{ $proof->user->last_name }}</td>
+                        <td>{{ ucfirst($proof->author_decision) }}</td>
+                        <td>{{ ucfirst($proof->admin_decision) }}</td>
+                        <td>{{ $proof->admin_reason ?? '—' }}</td>
+                        <td>
+                            @if ($proof->evidence_image)
+                                @include('admin.partials.proof-image', ['sighting' => $proof])
+                            @else
+                                —
+                            @endif
+                        </td>
+                        <td>{{ $proof->created_at->format('M j, Y g:i A') }}</td>
+                    </tr>
+                @empty
+                    <tr><td colspan="7" class="empty-cell">No previously reviewed evidence.</td></tr>
+                @endforelse
+                </tbody>
+            </table>
+        </div>
+        <div class="pagination">{{ $proofHistory->links() }}</div>
+    </section>
+
     <div class="image-modal" id="proof-image-modal" role="dialog" aria-modal="true" aria-labelledby="proof-image-title" hidden>
         <div class="image-modal-panel">
             <div class="image-modal-head">

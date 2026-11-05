@@ -1,3 +1,7 @@
+param(
+    [string]$DeviceId
+)
+
 $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path -Parent $PSScriptRoot
 $mobileRoot = Join-Path $projectRoot 'mobile'
@@ -8,9 +12,25 @@ if (-not (Test-Path $adb)) {
 }
 
 Set-Location $projectRoot
-$deviceMatch = & $adb devices | Select-String -Pattern '^(emulator-\d+)\s+device$' |
-    Select-Object -First 1
-$device = if ($deviceMatch) { $deviceMatch.Matches[0].Groups[1].Value } else { '' }
+$deviceRows = & $adb devices | Select-String -Pattern '^\S+\s+device$'
+$availableDevices = @($deviceRows | ForEach-Object { ($_ -split '\s+')[0] })
+if ($DeviceId) {
+    if ($availableDevices -notcontains $DeviceId) {
+        throw "Android device $DeviceId is not connected or authorized."
+    }
+    $device = $DeviceId
+} elseif ($availableDevices.Count -eq 1) {
+    $device = $availableDevices[0]
+} elseif ($availableDevices.Count -gt 1) {
+    $physicalDevices = @($availableDevices | Where-Object { $_ -notmatch '^emulator-\d+$' })
+    if ($physicalDevices.Count -eq 1) {
+        $device = $physicalDevices[0]
+    } else {
+        throw "More than one Android device is connected. Run this script with -DeviceId and choose one of: $($availableDevices -join ', ')."
+    }
+} else {
+    $device = ''
+}
 if (-not $device) {
     flutter emulators --launch Medium_Phone
     if ($LASTEXITCODE -ne 0) {
@@ -20,10 +40,10 @@ if (-not $device) {
 
 $deadline = (Get-Date).AddMinutes(5)
 while ((Get-Date) -lt $deadline -and -not $device) {
-    $deviceMatch = & $adb devices | Select-String -Pattern '^(emulator-\d+)\s+device$' |
-        Select-Object -First 1
-    if ($deviceMatch) {
-        $device = $deviceMatch.Matches[0].Groups[1].Value
+    $deviceRows = & $adb devices | Select-String -Pattern '^\S+\s+device$'
+    $availableDevices = @($deviceRows | ForEach-Object { ($_ -split '\s+')[0] })
+    if ($availableDevices.Count -eq 1) {
+        $device = $availableDevices[0]
     }
     if (-not $device) {
         Start-Sleep -Seconds 2
@@ -44,7 +64,7 @@ while ((Get-Date) -lt $deadline) {
 }
 
 if ($bootCompleted -ne '1') {
-    throw 'The Android emulator did not finish booting within three minutes.'
+    throw "Android device $device did not finish booting within the allowed time."
 }
 
 try {

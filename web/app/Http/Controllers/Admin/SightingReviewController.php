@@ -44,6 +44,16 @@ class SightingReviewController extends Controller
                 ->whereHas('post', fn ($query) => $query->where('type', 'lost'))
                 ->latest()
                 ->get(),
+            'proofHistory' => LostSighting::with([
+                'post.author:id,first_name,last_name',
+                'user:id,first_name,last_name',
+            ])
+                ->where('answer', 'yes')
+                ->where(fn ($query) => $query
+                    ->where('author_decision', '!=', 'pending')
+                    ->orWhere('admin_decision', '!=', 'pending'))
+                ->latest()
+                ->paginate(15, ['*'], 'history_page'),
         ]);
     }
 

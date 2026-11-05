@@ -17,11 +17,17 @@ class DashboardController extends Controller
     public function index(Request $request): View
     {
         $admin = Auth::guard('admin')->user();
-        $pendingClaims = ClaimRequest::where('status', 'pending')->count();
+        $pendingClaims = ClaimRequest::count();
         $pendingSightings = DB::table('lost_sightings')->where('answer', 'yes')
-            ->where('author_decision', 'approved')->where('admin_decision', 'pending')->count();
+            ->where(function ($query): void {
+                $query->where(function ($ownerReview): void {
+                    $ownerReview->where('author_decision', 'pending')->where('admin_decision', 'pending');
+                })->orWhere(function ($adminReview): void {
+                    $adminReview->where('author_decision', 'approved')->where('admin_decision', 'pending');
+                });
+            })->count();
         $pendingHandovers = DB::table('handovers')
-            ->where(fn ($query) => $query->whereNull('owner_confirmed_at')->orWhereNull('finder_confirmed_at'))
+            ->whereNotIn('status', ['completed', 'unsuccessful'])
             ->count();
         $pendingReports = DB::table('reports')->where('status', 'pending')->count();
         $pendingFeedback = DB::table('feedback')->whereIn('status', ['open', 'reviewing'])->count();
@@ -53,6 +59,7 @@ class DashboardController extends Controller
             'newUsers' => User::where('created_at', '>=', now()->subDays(30))->count(),
             'activePosts' => Post::whereIn('status', ['active', 'claim_pending', 'handover_pending'])->count(),
             'foundPosts' => Post::where('type', 'found')->count(),
+            'lostPosts' => Post::where('type', 'lost')->count(),
             'adminNotifications' => $admin->unreadNotifications()->latest()->limit(8)->get(),
             'shortcuts' => $shortcuts,
         ]);

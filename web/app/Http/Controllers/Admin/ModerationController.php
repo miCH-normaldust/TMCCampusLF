@@ -14,13 +14,19 @@ use Illuminate\View\View;
 
 class ModerationController extends Controller
 {
-    public function index(): View
+    public function index(Request $request): View
     {
+        $filters = $request->validate([
+            'status' => ['nullable', 'in:pending,dismissed,actioned,all'],
+        ]);
+        $status = $filters['status'] ?? 'pending';
+
         return view('admin.reports', [
             'reports' => Report::with(['post.author', 'reporter:id,first_name,last_name'])
-                ->where('status', 'pending')
+                ->when($status !== 'all', fn ($query) => $query->where('status', $status))
                 ->latest()
                 ->paginate(15),
+            'status' => $status,
         ]);
     }
 
@@ -38,24 +44,29 @@ class ModerationController extends Controller
             $reason = $data['reason'] ?? null;
             switch ($data['action']) {
                 case 'dismiss':
-                    $report->update(['status' => 'dismissed']);
+                    $report->update(['status' => 'dismissed', 'action' => 'dismiss']);
                     break;
                 case 'hide':
                     $post->update(['status' => 'hidden', 'hidden_reason' => $reason]);
-                    $report->update(['status' => 'actioned']);
+                    $report->update(['status' => 'actioned', 'action' => 'hide', 'admin_reason' => $reason]);
                     break;
                 case 'delete':
+                    Report::where('post_id', $post->id)->update([
+                        'status' => 'actioned',
+                        'action' => 'delete',
+                        'admin_reason' => $reason,
+                    ]);
                     foreach ($post->images as $image) {
                         Storage::disk('public')->delete($image->path);
                     }
                     $post->delete();
                     break;
                 case 'warn':
-                    $report->update(['status' => 'actioned']);
+                    $report->update(['status' => 'actioned', 'action' => 'warn', 'admin_reason' => $reason]);
                     break;
                 case 'suspend':
                     $author->update(['status' => 'suspended']);
-                    $report->update(['status' => 'actioned']);
+                    $report->update(['status' => 'actioned', 'action' => 'suspend', 'admin_reason' => $reason]);
                     break;
             }
 

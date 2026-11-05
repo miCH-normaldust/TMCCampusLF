@@ -4,13 +4,13 @@
 
 @section('content')
     <div class="page-heading handover-history-heading">
-        <div><p class="eyebrow">COMPLETED RETURNS</p><h1>Handover History</h1><p class="muted">A record of item exchanges confirmed directly by both participants after the required approvals.</p></div>
+        <div><p class="eyebrow">HANDOVER OUTCOMES</p><h1>Handover History</h1><p class="muted">Completed and unsuccessful transactions, linked to their original campus posts.</p></div>
         <a class="button secondary" href="{{ route('admin.handovers.index') }}">View in-progress handovers</a>
     </div>
 
     <div class="history-summary">
         <span class="history-summary-icon" aria-hidden="true">⇄</span>
-        <div><strong>{{ number_format($handovers->total()) }} completed {{ \Illuminate\Support\Str::plural('handover', $handovers->total()) }}</strong><p>Every record links back to the original post and both participants’ confirmation times.</p></div>
+        <div><strong>{{ number_format($handovers->total()) }} {{ \Illuminate\Support\Str::plural('handover outcome', $handovers->total()) }}</strong><p>Every record links back to the original post and shows why the transaction ended.</p></div>
     </div>
 
     <section class="handover-history-list" aria-label="Completed handovers">
@@ -33,12 +33,12 @@
                         <span class="history-transfer" aria-label="handed over to">⇄</span>
                         <span><small>{{ $post?->type === 'lost' ? 'Finder / handler' : 'Verified claimant' }}</small>{{ $otherName }}</span>
                     </span>
-                    <span class="history-card-footer"><span>✓ Both participants confirmed</span><span>◷ Completed {{ $handover->updated_at->format('M j, Y · g:i A') }}</span></span>
+                    <span class="history-card-footer"><span>{{ $handover->status === 'completed' ? '✓ Retrieved' : '× Unsuccessful' }}</span><span>◷ {{ $handover->status === 'completed' ? 'Completed' : 'Ended' }} {{ ($handover->completed_at ?? $handover->unsuccessful_at ?? $handover->updated_at)->format('M j, Y · g:i A') }}</span></span>
                 </span>
                 <span class="history-card-arrow" aria-hidden="true">→</span>
             </a>
         @empty
-            <div class="card history-empty"><span aria-hidden="true">⇄</span><h2>No completed handovers yet</h2><p>Once both participants confirm an approved exchange in the app, its record will appear here.</p><a class="button secondary" href="{{ route('admin.handovers.index') }}">Go to handovers</a></div>
+            <div class="card history-empty"><span aria-hidden="true">⇄</span><h2>No handover outcomes yet</h2><p>Completed and unsuccessful transactions will appear here.</p><a class="button secondary" href="{{ route('admin.handovers.index') }}">Go to handovers</a></div>
         @endforelse
     </section>
 

@@ -13,7 +13,7 @@
         $otherRole = $post?->type === 'lost' ? 'Finder / item handler' : 'Verified claimant';
     @endphp
     <a class="button secondary history-back-link" href="{{ route('admin.handovers.history') }}">← Back to history</a>
-    <div class="page-heading history-detail-heading"><div><p class="eyebrow">COMPLETED EXCHANGE · #{{ $handover->id }}</p><h1>{{ $post?->item_name ?? 'Campus item' }}</h1><p class="muted">Handover record and original listing details.</p></div><span class="history-complete-badge"><span aria-hidden="true">✓</span> Both participants confirmed</span></div>
+    <div class="page-heading history-detail-heading"><div><p class="eyebrow">{{ strtoupper($handover->status) }} · #{{ $handover->id }}</p><h1>{{ $post?->item_name ?? 'Campus item' }}</h1><p class="muted">Handover record and original listing details.</p></div><span class="history-complete-badge">{{ $handover->status === 'completed' ? '✓ Retrieval confirmed by TMC' : '× Transaction unsuccessful' }}</span></div>
 
     <section class="history-detail-layout">
         <article class="card origin-post-card">
@@ -21,7 +21,7 @@
             @if ($post?->images?->isNotEmpty())
                 <div class="origin-post-images">
                     @foreach ($post->images as $image)
-                        <img src="{{ \Illuminate\Support\Facades\Storage::disk('public')->url($image->path) }}" alt="{{ $image->alt_text ?: $post->item_name }}" loading="lazy">
+                        <img src="{{ \App\Support\PublicMediaUrl::forPath($image->path) }}" alt="{{ $image->alt_text ?: $post->item_name }}" loading="lazy">
                     @endforeach
                 </div>
             @endif
@@ -45,9 +45,14 @@
 
             <section class="card exchange-timeline">
                 <p class="eyebrow">HANDOVER DETAILS</p>
-                <div class="timeline-detail"><span class="timeline-icon">◷</span><span><small>Owner confirmation</small><strong>{{ $handover->owner_confirmed_at->format('l, F j, Y') }}</strong><small>{{ $handover->owner_confirmed_at->format('g:i A') }}</small></span></div>
-                <div class="timeline-detail"><span class="timeline-icon">✓</span><span><small>Finder / handler confirmation</small><strong>{{ $handover->finder_confirmed_at->format('l, F j, Y') }}</strong><small>{{ $handover->finder_confirmed_at->format('g:i A') }}</small></span></div>
-                <div class="verified-by-note">Both authorized participants confirmed the exchange in CampusLF.</div>
+                <div class="timeline-detail"><span class="timeline-icon">◷</span><span><small>Scheduled handover</small><strong>{{ $handover->scheduled_at?->format('l, F j, Y') ?? 'Not scheduled' }}</strong><small>{{ $handover->location?->name ?? '—' }}</small></span></div>
+                @if ($handover->status === 'completed')
+                    <div class="timeline-detail"><span class="timeline-icon">✓</span><span><small>Retrieved confirmation</small><strong>{{ $handover->completed_at?->format('l, F j, Y g:i A') ?? '—' }}</strong></span></div>
+                    <div class="verified-by-note">TMC verified the receipt code and confirmed that the item was retrieved.</div>
+                @else
+                    <div class="timeline-detail"><span class="timeline-icon">×</span><span><small>Unsuccessful</small><strong>{{ $handover->unsuccessful_at?->format('l, F j, Y g:i A') ?? '—' }}</strong><small>{{ $handover->failure_reason }}</small></span></div>
+                    <div class="verified-by-note">The original post is active again for members to respond to.</div>
+                @endif
             </section>
         </aside>
     </section>

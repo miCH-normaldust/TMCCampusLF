@@ -7,6 +7,7 @@ use App\Models\ClaimRequest;
 use App\Models\Conversation;
 use App\Models\Handover;
 use App\Models\Post;
+use App\Services\ImageReencoder;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -14,7 +15,7 @@ use Illuminate\Support\Str;
 
 class ClaimController extends Controller
 {
-    public function store(Request $request, Post $post): JsonResponse
+    public function store(Request $request, Post $post, ImageReencoder $images): JsonResponse
     {
         abort_unless($post->type === 'found' && in_array($post->status, ['active', 'claim_pending'], true), 409, 'This found item is not accepting claims.');
         abort_if($post->user_id === $request->user()->id, 403, 'You cannot claim your own post.');
@@ -22,11 +23,13 @@ class ClaimController extends Controller
         $data = $request->validate([
             'answers' => ['required', 'array', 'min:1', 'max:3'],
             'answers.*' => ['required', 'string', 'max:1000'],
+            'evidence_images' => ['nullable', 'array', 'max:5'],
+            'evidence_images.*' => ['image', 'mimes:jpg,jpeg,png,webp', 'max:5120'],
         ]);
         $questions = $post->verificationQuestions()->count();
         abort_if(count($data['answers']) !== $questions, 422, 'Answer every verification question.');
 
-        [$claim, $updated] = DB::transaction(function () use ($request, $post, $data): array {
+        [$claim, $updated] = DB::transaction(function () use ($request, $post, $data, $images): array {
             $lockedPost = Post::whereKey($post->id)->lockForUpdate()->firstOrFail();
             $userClaims = $lockedPost->claimRequests()
                 ->where('claimant_id', $request->user()->id)
@@ -44,6 +47,12 @@ class ClaimController extends Controller
                 $latestClaim->update([
                     'answers' => array_map(fn (string $answer): string => mb_strtolower(trim($answer)), $data['answers']),
                 ]);
+                if (isset($data['evidence_images'])) {
+                    $latestClaim->evidenceImages()->delete();
+                    foreach ($data['evidence_images'] as $image) {
+                        $latestClaim->evidenceImages()->create(['path' => $images->store($image)]);
+                    }
+                }
 
                 return [$latestClaim->fresh(), true];
             }
@@ -52,25 +61,17 @@ class ClaimController extends Controller
                 abort(409, 'You already have an active approved claim for this post.');
             }
 
-            $rejectedClaims = $userClaims->filter(function ($c) {
-                return $c->status === 'rejected' || $c->author_decision === 'rejected';
-            });
-
-            $rejectionsCount = $rejectedClaims->count();
-            if ($rejectionsCount >= 2) {
-                $lastRejected = $rejectedClaims->first();
-                $lastRejectedAt = $lastRejected->updated_at ?? $lastRejected->created_at;
-                $waitPeriodEnd = $lastRejectedAt->copy()->addHours(24);
-
-                if (now()->lt($waitPeriodEnd)) {
-                    $minutesLeft = (int) ceil(now()->diffInSeconds($waitPeriodEnd) / 60);
-                    $hours = floor($minutesLeft / 60);
-                    $mins = $minutesLeft % 60;
-                    $timeStr = $hours > 0 ? "{$hours}h {$mins}m" : "{$mins}m";
-
-                    abort(429, "Your previous claim attempts were rejected. After 2 rejections, please wait {$timeStr} before submitting another claim attempt.");
-                }
-            }
+            $attemptLimit = (int) DB::table('settings')->where('key', 'claim_attempts')->value('value') ?: 3;
+            abort_if(
+                $userClaims->count() >= $attemptLimit,
+                429,
+                "You have used all {$attemptLimit} claim attempts for this item.",
+            );
+            abort_if(
+                empty($data['evidence_images']),
+                422,
+                'Upload at least one photo showing that you own this item.',
+            );
 
             $dailyLimit = (int) DB::table('settings')->where('key', 'claims_per_day')->value('value') ?: 5;
             abort_if(ClaimRequest::where('claimant_id', $request->user()->id)->whereDate('created_at', today())->count() >= $dailyLimit, 429, 'Daily claim limit reached.');
@@ -83,6 +84,9 @@ class ClaimController extends Controller
                 'status' => 'pending',
                 'author_decision' => 'pending',
             ]);
+            foreach ($data['evidence_images'] as $image) {
+                $claim->evidenceImages()->create(['path' => $images->store($image)]);
+            }
             $lockedPost->update(['status' => 'claim_pending']);
             $lockedPost->author->notifications()->create([
                 'id' => (string) Str::uuid(),
@@ -104,6 +108,7 @@ class ClaimController extends Controller
                 : 'Your claim is waiting for administrator review.',
             'claim_id' => $claim->id,
             'attempt_no' => $claim->attempt_no,
+            'attempt_limit' => (int) DB::table('settings')->where('key', 'claim_attempts')->value('value') ?: 3,
             'updated' => $updated,
             'editable' => $claim->status === 'pending'
                 && $claim->created_at->gt(now()->subHour()),
@@ -123,37 +128,16 @@ class ClaimController extends Controller
             return response()->json(['data' => null]);
         }
 
-        $rejectedClaims = $userClaims->filter(function ($c) {
-            return $c->status === 'rejected' || $c->author_decision === 'rejected';
-        });
-
-        $rejectionsCount = $rejectedClaims->count();
         $isRejected = $claim->status === 'rejected' || $claim->author_decision === 'rejected';
-        $canReapply = false;
-        $waitTimeStr = null;
-
-        if ($isRejected) {
-            if ($rejectionsCount < 2) {
-                $canReapply = true;
-            } else {
-                $lastRejected = $rejectedClaims->first();
-                $lastRejectedAt = $lastRejected->updated_at ?? $lastRejected->created_at;
-                $waitPeriodEnd = $lastRejectedAt->copy()->addHours(24);
-
-                if (now()->gte($waitPeriodEnd)) {
-                    $canReapply = true;
-                } else {
-                    $minutesLeft = (int) ceil(now()->diffInSeconds($waitPeriodEnd) / 60);
-                    $hours = floor($minutesLeft / 60);
-                    $mins = $minutesLeft % 60;
-                    $waitTimeStr = $hours > 0 ? "{$hours}h {$mins}m" : "{$mins}m";
-                }
-            }
-        }
+        $attemptLimit = (int) DB::table('settings')->where('key', 'claim_attempts')->value('value') ?: 3;
+        $canReapply = $isRejected && $userClaims->count() < $attemptLimit;
 
         return response()->json(['data' => [
             'id' => $claim->id,
             'answers' => $claim->answers,
+            'evidence_images' => $claim->evidenceImages
+                ->map(fn ($image): string => \App\Support\PublicMediaUrl::forPath($image->path))
+                ->all(),
             'status' => $claim->status,
             'author_decision' => $claim->author_decision,
             'created_at' => $claim->created_at,
@@ -161,9 +145,9 @@ class ClaimController extends Controller
             'editable' => $claim->status === 'pending'
                 && $claim->created_at->gt(now()->subHour()),
             'is_rejected' => $isRejected,
-            'rejections_count' => $rejectionsCount,
+            'attempts_used' => $userClaims->count(),
+            'attempt_limit' => $attemptLimit,
             'can_reapply' => $canReapply,
-            'wait_time_left' => $waitTimeStr,
         ]]);
     }
 
@@ -173,6 +157,7 @@ class ClaimController extends Controller
             'post:id,item_name,type,category_id',
             'post.category:id,name',
             'claimant:id,first_name,last_name',
+            'evidenceImages',
         ])
             ->where('status', 'approved')
             ->where('author_decision', 'pending')
@@ -186,6 +171,9 @@ class ClaimController extends Controller
                 'claimant_first_name' => $claim->claimant->first_name,
                 'claimant_last_name' => $claim->claimant->last_name,
                 'attempt_no' => $claim->attempt_no,
+                'evidence_images' => $claim->evidenceImages
+                    ->map(fn ($image): string => \App\Support\PublicMediaUrl::forPath($image->path))
+                    ->all(),
                 'admin_reviewed_at' => $claim->reviewed_at,
             ]);
 

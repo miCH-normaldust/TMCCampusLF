@@ -4,6 +4,7 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\HasOne;
 
 class ClaimRequest extends Model
@@ -40,5 +41,10 @@ class ClaimRequest extends Model
     public function conversation(): HasOne
     {
         return $this->hasOne(Conversation::class, 'claim_id');
+    }
+
+    public function evidenceImages(): HasMany
+    {
+        return $this->hasMany(ClaimEvidenceImage::class, 'claim_id');
     }
 }

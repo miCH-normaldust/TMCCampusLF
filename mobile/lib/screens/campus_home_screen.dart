@@ -20,10 +20,7 @@ class _ReactionState {
   final String? reaction;
 }
 
-CampusPost _applyReaction(
-  CampusPost post,
-  Map<int, _ReactionState> overrides,
-) {
+CampusPost _applyReaction(CampusPost post, Map<int, _ReactionState> overrides) {
   final override = overrides[post.id];
   if (override == null) return post;
   return post.withReaction(
@@ -1638,6 +1635,8 @@ class _PostDetailSheet extends StatefulWidget {
 
 class _PostDetailSheetState extends State<_PostDetailSheet> {
   final _answers = <TextEditingController>[];
+  final List<XFile> _claimPhotos = [];
+  List<String> _ownClaimImages = [];
   final _comment = TextEditingController();
   bool _busy = false;
   String? _message;
@@ -1646,7 +1645,8 @@ class _PostDetailSheetState extends State<_PostDetailSheet> {
   bool _canEditClaim = false;
   bool _claimRejected = false;
   bool _claimCanReapply = false;
-  String? _claimWaitTimeLeft;
+  int _claimAttemptsUsed = 0;
+  int _claimAttemptLimit = 3;
   bool _loadingOwnSighting = false;
   String? _ownSightingText;
   String? _ownSightingImage;
@@ -1654,7 +1654,8 @@ class _PostDetailSheetState extends State<_PostDetailSheet> {
   bool _canEditSighting = false;
   bool _sightingRejected = false;
   bool _sightingCanReapply = false;
-  String? _sightingWaitTimeLeft;
+  int _sightingAttemptsUsed = 0;
+  int _sightingAttemptLimit = 3;
   String? _replyToName;
   int? _replyToId;
   String? _myReaction;
@@ -1716,21 +1717,23 @@ class _PostDetailSheetState extends State<_PostDetailSheet> {
         }
         setState(() {
           _ownClaimId = claim['id'] as int?;
+          _ownClaimImages = (claim['evidence_images'] as List? ?? const [])
+              .whereType<String>()
+              .toList();
           _canEditClaim = claim['editable'] as bool? ?? false;
           _claimRejected = claim['is_rejected'] as bool? ?? false;
           _claimCanReapply = claim['can_reapply'] as bool? ?? false;
-          _claimWaitTimeLeft = claim['wait_time_left'] as String?;
+          _claimAttemptsUsed = claim['attempts_used'] as int? ?? 0;
+          _claimAttemptLimit = claim['attempt_limit'] as int? ?? 3;
           final status = claim['status'] as String? ?? 'pending';
           if (status == 'approved' && !_claimRejected) {
-            _message =
-                'Your claim was approved and is awaiting the post owner’s decision.';
+            _message = 'Your claim was approved and is awaiting the post owner’s decision.';
           } else if (_claimRejected) {
             _message = _claimCanReapply
                 ? 'Your claim was not approved. You can submit another claim.'
-                : 'Your claim was rejected twice. Please wait ${_claimWaitTimeLeft ?? '24h'} before submitting another claim.';
+                : 'You used all $_claimAttemptLimit claim attempts for this item.';
           } else {
-            _message =
-                'Your claim has already been submitted and is waiting for review.';
+            _message = 'Your claim has already been submitted and is waiting for review.';
           }
         });
       }
@@ -1756,7 +1759,8 @@ class _PostDetailSheetState extends State<_PostDetailSheet> {
           _canEditSighting = sighting['editable'] as bool? ?? false;
           _sightingRejected = sighting['is_rejected'] as bool? ?? false;
           _sightingCanReapply = sighting['can_reapply'] as bool? ?? false;
-          _sightingWaitTimeLeft = sighting['wait_time_left'] as String?;
+          _sightingAttemptsUsed = sighting['attempts_used'] as int? ?? 0;
+          _sightingAttemptLimit = sighting['attempt_limit'] as int? ?? 3;
           final ownerDecision =
               sighting['author_decision'] as String? ?? 'pending';
           final adminDecision =
@@ -1767,16 +1771,13 @@ class _PostDetailSheetState extends State<_PostDetailSheet> {
                 'Your evidence was not approved.';
             _message = _sightingCanReapply
                 ? '$reason You can submit new evidence.'
-                : '$reason Please wait ${_sightingWaitTimeLeft ?? '24h'} before submitting evidence again.';
+                : '$reason You used all $_sightingAttemptLimit evidence attempts for this item.';
           } else if (adminDecision == 'approved') {
-            _message =
-                'Your evidence was approved. Open Inbox to chat and arrange the handover.';
+            _message = 'Your evidence was approved. Open Inbox to chat and arrange the handover.';
           } else if (ownerDecision == 'approved') {
-            _message =
-                'The post owner approved your evidence. It is waiting for TMC review.';
+            _message = 'The post owner approved your evidence. It is waiting for TMC review.';
           } else {
-            _message =
-                'Your evidence was sent and is waiting for the post owner to review it.';
+            _message = 'Your evidence was sent and is waiting for the post owner to review it.';
           }
         });
       }
@@ -1793,9 +1794,19 @@ class _PostDetailSheetState extends State<_PostDetailSheet> {
       _message = null;
     });
     try {
+      final fields = <String, dynamic>{
+        'answers': _answers.map((answer) => answer.text).toList(),
+      };
+      if (_claimPhotos.isNotEmpty) {
+        fields['evidence_images'] = await Future.wait(
+          _claimPhotos.map(
+            (photo) => MultipartFile.fromFile(photo.path, filename: photo.name),
+          ),
+        );
+      }
       final response = await widget.api.dio.post<Map<String, dynamic>>(
         '/posts/${widget.post.id}/claims',
-        data: {'answers': _answers.map((answer) => answer.text).toList()},
+        data: FormData.fromMap(fields),
       );
       if (mounted) {
         setState(() {
@@ -1803,7 +1814,10 @@ class _PostDetailSheetState extends State<_PostDetailSheet> {
           _canEditClaim = response.data?['editable'] as bool? ?? false;
           _claimRejected = false;
           _claimCanReapply = false;
-          _claimWaitTimeLeft = null;
+          _claimAttemptsUsed =
+              response.data?['attempt_no'] as int? ?? _claimAttemptsUsed;
+          _claimAttemptLimit =
+              response.data?['attempt_limit'] as int? ?? _claimAttemptLimit;
           _message =
               response.data?['message'] as String? ?? 'Claim sent for review.';
         });
@@ -1813,6 +1827,21 @@ class _PostDetailSheetState extends State<_PostDetailSheet> {
     } finally {
       if (mounted) setState(() => _busy = false);
     }
+  }
+
+  Future<void> _pickClaimPhotos() async {
+    final photos = await ImagePicker().pickMultiImage(imageQuality: 85);
+    if (!mounted || photos.isEmpty) return;
+    if (photos.length > 5) {
+      setState(() => _message = 'Choose no more than five photos.');
+      return;
+    }
+    setState(() {
+      _claimPhotos
+        ..clear()
+        ..addAll(photos);
+      _message = null;
+    });
   }
 
   Future<void> _sendComment() async {
@@ -2036,14 +2065,56 @@ class _PostDetailSheetState extends State<_PostDetailSheet> {
                   ),
                   const SizedBox(height: 12),
                 ],
+                OutlinedButton.icon(
+                  onPressed: _busy ? null : _pickClaimPhotos,
+                  icon: const Icon(Icons.add_photo_alternate_outlined),
+                  label: Text(
+                    _claimPhotos.isNotEmpty
+                        ? '${_claimPhotos.length} ownership photo(s) selected'
+                        : 'Add photos proving ownership (required)',
+                  ),
+                ),
+                if (_ownClaimImages.isNotEmpty) ...[
+                  const SizedBox(height: 8),
+                  const Text('Previously submitted photos'),
+                  Wrap(
+                    spacing: 8,
+                    children: [
+                      for (final imageUrl in _ownClaimImages)
+                        ClipRRect(
+                          borderRadius: BorderRadius.circular(8),
+                          child: Image.network(
+                            imageUrl,
+                            width: 64,
+                            height: 64,
+                            fit: BoxFit.cover,
+                          ),
+                        ),
+                    ],
+                  ),
+                ],
+                if (_claimPhotos.isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 6),
+                    child: Text(
+                      _claimPhotos.map((photo) => photo.name).join(', '),
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                Text(
+                  'Claim attempt ${_claimAttemptsUsed == 0 ? 1 : _claimAttemptsUsed} of $_claimAttemptLimit',
+                ),
                 const Text(
-                  'You can retry a rejected claim once. After two rejections you must wait 24 hours before submitting again. Your private answers are reviewed by TMC administrators.',
+                  'Submit photos of the item and answer every ownership question. TMC administrators review your evidence before the post owner decides.',
                 ),
                 const SizedBox(height: 12),
                 FilledButton(
                   onPressed:
                       _busy ||
                           _loadingOwnClaim ||
+                          (_claimPhotos.isEmpty &&
+                              !(_canEditClaim && _ownClaimImages.isNotEmpty)) ||
                           (_ownClaimId != null &&
                               !_canEditClaim &&
                               !(_claimRejected && _claimCanReapply))
@@ -2059,7 +2130,7 @@ class _PostDetailSheetState extends State<_PostDetailSheet> {
                               : _claimRejected && _claimCanReapply
                               ? 'Submit another claim'
                               : _claimRejected
-                              ? 'Wait ${_claimWaitTimeLeft ?? '24h'} to retry'
+                              ? 'Claim attempts used'
                               : 'Claim submitted',
                         ),
                 ),
@@ -2087,8 +2158,7 @@ class _PostDetailSheetState extends State<_PostDetailSheet> {
                             _loadingOwnSighting ||
                                 (_ownSightingId != null &&
                                     !_canEditSighting &&
-                                    !(_sightingRejected &&
-                                        _sightingCanReapply))
+                                    !(_sightingRejected && _sightingCanReapply))
                             ? null
                             : () => showModalBottomSheet<void>(
                                 context: context,
@@ -2118,7 +2188,7 @@ class _PostDetailSheetState extends State<_PostDetailSheet> {
                               : _sightingRejected && _sightingCanReapply
                               ? 'Submit new evidence'
                               : _sightingRejected
-                              ? 'Wait ${_sightingWaitTimeLeft ?? '24h'} to resubmit'
+                              ? 'Evidence attempts used'
                               : 'Evidence submitted',
                         ),
                       ),
@@ -2129,6 +2199,10 @@ class _PostDetailSheetState extends State<_PostDetailSheet> {
                       child: const Text('No'),
                     ),
                   ],
+                ),
+                Text(
+                  'Evidence attempts: $_sightingAttemptsUsed of $_sightingAttemptLimit',
+                  style: Theme.of(context).textTheme.bodySmall,
                 ),
               ],
               const Divider(height: 28),
@@ -3585,7 +3659,8 @@ class _InboxScreenState extends State<InboxScreen> {
                       conversation['other_last_name'] as String? ?? '';
                   final pictureUrl =
                       conversation['other_profile_picture_url'] as String?;
-                  final isRequest = conversation['is_request'] as bool? ?? false;
+                  final isRequest =
+                      conversation['is_request'] as bool? ?? false;
                   return Card(
                     child: ListTile(
                       leading: otherUserId == null
@@ -3624,7 +3699,8 @@ class _InboxScreenState extends State<InboxScreen> {
                         children: [
                           Expanded(
                             child: Text(
-                              conversation['item_name'] as String? ?? 'TMC item',
+                              conversation['item_name'] as String? ??
+                                  'TMC item',
                               overflow: TextOverflow.ellipsis,
                             ),
                           ),
@@ -3635,14 +3711,18 @@ class _InboxScreenState extends State<InboxScreen> {
                                 vertical: 2,
                               ),
                               decoration: BoxDecoration(
-                                color: Theme.of(context).colorScheme.errorContainer,
+                                color: Theme.of(context)
+                                    .colorScheme
+                                    .errorContainer,
                                 borderRadius: BorderRadius.circular(6),
                               ),
                               child: Text(
                                 'Request',
                                 style: TextStyle(
                                   fontSize: 11,
-                                  color: Theme.of(context).colorScheme.onErrorContainer,
+                                  color: Theme.of(context)
+                                      .colorScheme
+                                      .onErrorContainer,
                                   fontWeight: FontWeight.bold,
                                 ),
                               ),
@@ -3655,7 +3735,8 @@ class _InboxScreenState extends State<InboxScreen> {
                             : () => widget.onOpenProfile(otherUserId),
                         child: Text(
                           isRequest
-                              ? 'Message Request from $firstName $lastName'.trim()
+                              ? 'Message Request from $firstName $lastName'
+                                    .trim()
                               : 'Chat with $firstName $lastName'.trim(),
                           style: TextStyle(
                             color: Theme.of(context).colorScheme.primary,
@@ -3899,7 +3980,7 @@ class _InboxScreenState extends State<InboxScreen> {
           SnackBar(
             content: Text(
               decision == 'approve'
-                  ? 'You agreed to the claim. Both people can now confirm the handover.'
+                  ? 'You agreed to the claim. TMC administrators must approve before both participants can agree and schedule the handover.'
                   : 'Your decision was recorded.',
             ),
           ),
@@ -3993,8 +4074,35 @@ class _InboxScreenState extends State<InboxScreen> {
                         ],
                       ),
                       const SizedBox(height: 12),
+                      if (claim['evidence_images'] is List &&
+                          (claim['evidence_images'] as List).isNotEmpty) ...[
+                        const Text(
+                          'Claimant ownership photos',
+                          style: TextStyle(fontWeight: FontWeight.w700),
+                        ),
+                        const SizedBox(height: 8),
+                        Wrap(
+                          spacing: 8,
+                          runSpacing: 8,
+                          children: [
+                            for (final imageUrl
+                                in (claim['evidence_images'] as List)
+                                    .whereType<String>())
+                              ClipRRect(
+                                borderRadius: BorderRadius.circular(8),
+                                child: Image.network(
+                                  imageUrl,
+                                  width: 76,
+                                  height: 76,
+                                  fit: BoxFit.cover,
+                                ),
+                              ),
+                          ],
+                        ),
+                        const SizedBox(height: 12),
+                      ],
                       const Text(
-                        'TMC administrators approved the claim. Do you agree to hand over this item to the claimant?',
+                        'TMC administrators approved the ownership evidence. Do you agree to hand over this item to the claimant?',
                       ),
                       const SizedBox(height: 14),
                       Row(
@@ -4029,6 +4137,8 @@ class _InboxScreenState extends State<InboxScreen> {
     final handoverId = handover['id'] as int;
     final completed = handover['completed'] == true;
     final confirmed = handover['my_confirmation_at'] != null;
+    final status = handover['status'] as String? ?? 'awaiting_admin';
+    final receiptCode = handover['receipt_code'] as String?;
     await showDialog<void>(
       context: context,
       builder: (dialogContext) => AlertDialog(
@@ -4042,19 +4152,53 @@ class _InboxScreenState extends State<InboxScreen> {
             ),
             const SizedBox(height: 12),
             Text(
-              'Item owner: ${handover['owner_confirmed_at'] != null ? 'confirmed' : 'waiting'}',
+              'TMC administrator: ${handover['admin_approved_at'] != null ? 'approved' : 'reviewing'}',
             ),
             Text(
-              'Finder / handler: ${handover['finder_confirmed_at'] != null ? 'confirmed' : 'waiting'}',
+              'Item owner: ${handover['owner_confirmed_at'] != null ? 'agreed' : 'waiting'}',
+            ),
+            Text(
+              'Other participant: ${handover['finder_confirmed_at'] != null ? 'agreed' : 'waiting'}',
             ),
             const SizedBox(height: 12),
             Text(
               completed
-                  ? 'Both participants confirmed this exchange.'
-                  : confirmed
-                  ? 'Your confirmation is recorded. Waiting for the other participant.'
-                  : 'Confirm only after you have received or handed over the item.',
+                  ? 'TMC confirmed that the owner retrieved the item.'
+                  : status == 'awaiting_admin'
+                  ? 'Waiting for initial TMC administrator approval.'
+                  : status == 'awaiting_participants'
+                  ? confirmed
+                        ? 'Your agreement is recorded. Waiting for the other participant.'
+                        : 'TMC approved this handover. Agree only if you consent to proceed.'
+                  : status == 'awaiting_schedule'
+                  ? 'Both participants agreed. TMC will choose the place and date.'
+                  : status == 'reschedule_requested'
+                  ? 'A reschedule request is waiting for TMC review.'
+                  : status == 'unsuccessful'
+                  ? 'This transaction was unsuccessful. The original post is active again.'
+                  : 'Your handover is scheduled. Bring this receipt to the listed place.',
             ),
+            if (handover['scheduled_at'] is String) ...[
+              const SizedBox(height: 8),
+              Text('Date: ${handover['scheduled_at']}'),
+              Text('Place: ${handover['location'] ?? 'TMC campus'}'),
+            ],
+            if (receiptCode != null) ...[
+              const SizedBox(height: 12),
+              const Text('16-digit receipt code'),
+              SelectableText(
+                receiptCode,
+                style: Theme.of(context).textTheme.titleLarge,
+              ),
+            ],
+            if (status == 'scheduled' || status == 'reschedule_requested') ...[
+              const SizedBox(height: 8),
+              Text(
+                'Reschedule requests: ${handover['reschedule_attempts'] ?? 0} / ${handover['reschedule_limit'] ?? 2}',
+              ),
+              if (handover['reschedule_reason'] is String)
+                Text('Request: ${handover['reschedule_reason']}'),
+            ],
           ],
         ),
         actions: [
@@ -4062,7 +4206,7 @@ class _InboxScreenState extends State<InboxScreen> {
             onPressed: () => Navigator.pop(dialogContext),
             child: const Text('Close'),
           ),
-          if (!confirmed && !completed)
+          if (!confirmed && !completed && status == 'awaiting_participants')
             FilledButton.icon(
               onPressed: () async {
                 try {
@@ -4091,11 +4235,105 @@ class _InboxScreenState extends State<InboxScreen> {
                 }
               },
               icon: const Icon(Icons.check_circle_outline),
-              label: const Text('Confirm exchange'),
+              label: const Text('Agree to handover'),
+            ),
+          if (status == 'scheduled')
+            OutlinedButton(
+              onPressed: () async {
+                Navigator.pop(dialogContext);
+                await _requestHandoverReschedule(handover);
+              },
+              child: const Text('Request reschedule'),
+            ),
+          if (receiptCode != null)
+            TextButton.icon(
+              onPressed: () => SharePlus.instance.share(
+                ShareParams(
+                  subject: 'CampusLF handover receipt',
+                  text:
+                      'TMC CampusLF handover receipt\n'
+                      '${handover['item_name']}\n'
+                      'Date: ${handover['scheduled_at']}\n'
+                      'Place: ${handover['location'] ?? 'TMC campus'}\n'
+                      'Verification code: $receiptCode',
+                ),
+              ),
+              icon: const Icon(Icons.ios_share),
+              label: const Text('Share receipt'),
             ),
         ],
       ),
     );
+  }
+
+  Future<void> _requestHandoverReschedule(Map<String, dynamic> handover) async {
+    final date = TextEditingController();
+    final reason = TextEditingController();
+    final request = await showDialog<Map<String, String>>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Request a handover reschedule'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              controller: date,
+              keyboardType: TextInputType.datetime,
+              decoration: const InputDecoration(
+                labelText: 'Requested date',
+                hintText: 'YYYY-MM-DD',
+              ),
+            ),
+            TextField(
+              controller: reason,
+              maxLines: 3,
+              decoration: const InputDecoration(
+                labelText: 'Message to TMC administrators',
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext, {
+              'requested_date': date.text.trim(),
+              'reason': reason.text.trim(),
+            }),
+            child: const Text('Send request'),
+          ),
+        ],
+      ),
+    );
+    date.dispose();
+    reason.dispose();
+    if (request == null) return;
+
+    try {
+      final response = await widget.api.dio.post<Map<String, dynamic>>(
+        '/handovers/${handover['id']}/reschedule',
+        data: request,
+      );
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            response.data?['message'] as String? ??
+                'Your request was sent to TMC.',
+          ),
+        ),
+      );
+      setState(() => _handovers = _loadHandovers());
+    } on DioException catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(widget.api.errorMessage(error))));
+      }
+    }
   }
 
   Widget _handoverList() {
@@ -4134,6 +4372,7 @@ class _InboxScreenState extends State<InboxScreen> {
               final ownerConfirmed = handover['owner_confirmed_at'] != null;
               final finderConfirmed = handover['finder_confirmed_at'] != null;
               final completed = handover['completed'] == true;
+              final status = handover['status'] as String? ?? 'awaiting_admin';
               final itemType = (handover['type'] as String? ?? 'item')
                   .toUpperCase();
               return Card(
@@ -4144,8 +4383,8 @@ class _InboxScreenState extends State<InboxScreen> {
                   title: Text(handover['item_name'] as String? ?? 'TMC item'),
                   subtitle: Text(
                     '$itemType item · With ${handover['other_first_name'] ?? 'TMC member'}'
-                    '\nOwner: ${ownerConfirmed ? 'confirmed' : 'waiting'} · Finder: ${finderConfirmed ? 'confirmed' : 'waiting'}'
-                    '${completed ? '\nExchange complete' : ''}',
+                    '\nOwner: ${ownerConfirmed ? 'agreed' : 'waiting'} · Other participant: ${finderConfirmed ? 'agreed' : 'waiting'}'
+                    '\n${status.replaceAll('_', ' ')}${handover['scheduled_at'] is String ? ' · ${handover['scheduled_at']}' : ''}',
                   ),
                   isThreeLine: false,
                   trailing: completed
@@ -4299,10 +4538,8 @@ class _ConversationScreenState extends State<ConversationScreen> {
     final otherUserId = _conversation['other_user_id'] as int?;
     final otherFirstName =
         _conversation['other_first_name'] as String? ?? 'TMC';
-    final otherLastName =
-        _conversation['other_last_name'] as String? ?? '';
-    final otherPicture =
-        _conversation['other_profile_picture_url'] as String?;
+    final otherLastName = _conversation['other_last_name'] as String? ?? '';
+    final otherPicture = _conversation['other_profile_picture_url'] as String?;
     return Scaffold(
       appBar: AppBar(
         title: Column(
@@ -4517,9 +4754,7 @@ class _ConversationScreenState extends State<ConversationScreen> {
                         const SizedBox(width: 12),
                         Expanded(
                           child: FilledButton(
-                            onPressed: _actingOnRequest
-                                ? null
-                                : _acceptRequest,
+                            onPressed: _actingOnRequest ? null : _acceptRequest,
                             child: const Text('Accept Request'),
                           ),
                         ),
@@ -4531,8 +4766,9 @@ class _ConversationScreenState extends State<ConversationScreen> {
                           child: TextField(
                             controller: _message,
                             maxLength: 2000,
-                            decoration:
-                                const InputDecoration(labelText: 'Message'),
+                            decoration: const InputDecoration(
+                              labelText: 'Message',
+                            ),
                           ),
                         ),
                         IconButton(

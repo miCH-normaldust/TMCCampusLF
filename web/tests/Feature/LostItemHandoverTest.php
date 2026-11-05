@@ -5,11 +5,15 @@ namespace Tests\Feature;
 use App\Models\Category;
 use App\Models\ClaimRequest;
 use App\Models\Conversation;
+use App\Models\Handover;
 use App\Models\Location;
 use App\Models\LostSighting;
+use App\Models\MeetupLocation;
 use App\Models\Post;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Crypt;
+use Illuminate\Support\Facades\Hash;
 use Laravel\Sanctum\Sanctum;
 use Tests\TestCase;
 
@@ -17,7 +21,7 @@ class LostItemHandoverTest extends TestCase
 {
     use RefreshDatabase;
 
-    public function test_approved_lost_sighting_can_be_handed_over_and_confirmed_by_both_participants(): void
+    public function test_approved_lost_sighting_requires_admin_and_user_agreements_before_scheduled_retrieval(): void
     {
         [$owner, $finder, $category, $location] = $this->createParticipants();
         $post = Post::create([
@@ -54,23 +58,13 @@ class LostItemHandoverTest extends TestCase
             ->assertJsonPath('data.0.item_name', 'Blue notebook')
             ->assertJsonPath('data.0.other_first_name', 'Item')
             ->assertJsonPath('data.0.my_confirmation_at', null)
-            ->assertJsonPath('data.0.completed', false);
+            ->assertJsonPath('data.0.completed', false)
+            ->assertJsonPath('data.0.status', 'awaiting_admin');
 
         $outsider = $this->createUser('Outside', 'Member', 'outsider-handover');
         Sanctum::actingAs($outsider);
         $this->postJson("/api/v1/handovers/{$handoverId}/confirm")->assertNotFound();
 
-        Sanctum::actingAs($finder);
-        $this->postJson("/api/v1/handovers/{$handoverId}/confirm")
-            ->assertOk()
-            ->assertJsonPath('retrieved', false);
-
-        Sanctum::actingAs($owner);
-        $this->postJson("/api/v1/handovers/{$handoverId}/confirm")
-            ->assertOk()
-            ->assertJsonPath('retrieved', true);
-
-        $this->assertDatabaseHas('posts', ['id' => $post->id, 'status' => 'retrieved']);
         $this->assertDatabaseHas('handovers', [
             'id' => $handoverId,
             'sighting_id' => $sighting->id,
@@ -83,7 +77,9 @@ class LostItemHandoverTest extends TestCase
             ->assertOk()
             ->assertSee('Blue notebook')
             ->assertSee('Owner')
-            ->assertSee('Finder');
+            ->assertSee('Holder');
+        $this->approveAgreeScheduleAndComplete($admin, $handoverId, $owner, $finder);
+        $this->assertDatabaseHas('posts', ['id' => $post->id, 'status' => 'retrieved']);
 
         $this->get(route('admin.handovers.history'))
             ->assertOk()
@@ -96,7 +92,7 @@ class LostItemHandoverTest extends TestCase
             ->assertSee('Blue notebook')
             ->assertSee('Item Owner')
             ->assertSee('Item Finder')
-            ->assertDontSee('Meet-up location')
+            ->assertSee('Security Office')
             ->assertDontSee('Desk verified');
     }
 
@@ -165,16 +161,60 @@ class LostItemHandoverTest extends TestCase
             ->assertJsonPath('data.0.type', 'found')
             ->assertJsonPath('data.0.completed', false);
         $handoverId = $handoverList->json('data.0.id');
-
-        $this->postJson("/api/v1/handovers/{$handoverId}/confirm")
-            ->assertOk()
-            ->assertJsonPath('retrieved', false);
-
-        Sanctum::actingAs($author);
-        $this->postJson("/api/v1/handovers/{$handoverId}/confirm")
-            ->assertOk()
-            ->assertJsonPath('retrieved', true);
+        $admin = $this->createUser('Portal', 'Admin', 'admin-found-handover', 'admin');
+        $this->approveAgreeScheduleAndComplete($admin, $handoverId, $claimant, $author);
         $this->assertDatabaseHas('posts', ['id' => $post->id, 'status' => 'retrieved']);
+    }
+
+    private function approveAgreeScheduleAndComplete(
+        User $admin,
+        int $handoverId,
+        User $owner,
+        User $holder,
+    ): void {
+        $location = MeetupLocation::create([
+            'name' => 'Security Office',
+            'description' => 'Campus security counter',
+            'operating_hours' => 'Weekdays, 8:00 AM - 5:00 PM',
+            'is_active' => true,
+        ]);
+        $this->actingAs($admin, 'admin')
+            ->post(route('admin.handovers.approve', $handoverId))
+            ->assertRedirect();
+
+        Sanctum::actingAs($holder);
+        $this->postJson("/api/v1/handovers/{$handoverId}/confirm")
+            ->assertOk()
+            ->assertJsonPath('status', 'awaiting_participants');
+        Sanctum::actingAs($owner);
+        $this->postJson("/api/v1/handovers/{$handoverId}/confirm")
+            ->assertOk()
+            ->assertJsonPath('status', 'awaiting_schedule');
+
+        $this->actingAs($admin, 'admin')
+            ->post(route('admin.handovers.schedule', $handoverId), [
+                'location_id' => $location->id,
+                'scheduled_at' => now()->addDays(2)->setTime(10, 0)->toDateTimeString(),
+            ])
+            ->assertRedirect();
+
+        Sanctum::actingAs($owner);
+        $handover = $this->getJson('/api/v1/handovers')
+            ->assertOk()
+            ->assertJsonPath('data.0.status', 'scheduled');
+        $code = $handover->json('data.0.receipt_code');
+        $this->assertMatchesRegularExpression('/^[0-9]{16}$/', $code);
+
+        $this->actingAs($admin, 'admin')
+            ->post(route('admin.handovers.complete', $handoverId), ['code' => str_repeat('0', 16)])
+            ->assertUnprocessable();
+        $this->post(route('admin.handovers.complete', $handoverId), ['code' => $code])
+            ->assertRedirect();
+
+        $this->assertDatabaseHas('handovers', [
+            'id' => $handoverId,
+            'status' => 'completed',
+        ]);
     }
 
     public function test_post_author_can_decline_an_admin_approved_found_claim_without_creating_handover(): void
@@ -212,6 +252,86 @@ class LostItemHandoverTest extends TestCase
         ]);
         $this->assertDatabaseHas('posts', ['id' => $post->id, 'status' => 'active']);
         $this->assertDatabaseMissing('handovers', ['claim_id' => $claim->id]);
+    }
+
+    public function test_reschedule_attempt_limit_marks_handover_unsuccessful_and_reopens_post(): void
+    {
+        \Illuminate\Support\Facades\DB::table('settings')->updateOrInsert(
+            ['key' => 'handover_reschedule_attempts'],
+            ['value' => '2'],
+        );
+        [$owner, $finder, $category, $location] = $this->createParticipants();
+        $post = Post::create([
+            'user_id' => $owner->id,
+            'type' => 'lost',
+            'item_name' => 'Blue notebook',
+            'description' => 'Lost on campus.',
+            'category_id' => $category->id,
+            'color' => 'Blue',
+            'location_id' => $location->id,
+            'event_date' => today(),
+            'status' => 'handover_pending',
+        ]);
+        $sighting = LostSighting::create([
+            'post_id' => $post->id,
+            'user_id' => $finder->id,
+            'answer' => 'yes',
+            'author_decision' => 'approved',
+            'admin_decision' => 'approved',
+        ]);
+        $meetupLocation = MeetupLocation::create([
+            'name' => 'Security Office',
+            'is_active' => true,
+        ]);
+        $code = '1234567890123456';
+        $handover = Handover::create([
+            'sighting_id' => $sighting->id,
+            'status' => 'scheduled',
+            'admin_approved_at' => now(),
+            'owner_confirmed_at' => now(),
+            'finder_confirmed_at' => now(),
+            'scheduled_at' => now()->addDays(3),
+            'location_id' => $meetupLocation->id,
+            'code_hash' => Hash::make($code),
+            'code_encrypted' => Crypt::encryptString($code),
+            'code_lookup' => hash_hmac('sha256', $code, config('app.key')),
+            'expires_at' => now()->addDays(3)->endOfDay(),
+        ]);
+        $requestedDate = now()->addDays(5)->toDateString();
+
+        Sanctum::actingAs($owner);
+        $this->postJson("/api/v1/handovers/{$handover->id}/reschedule", [
+            'requested_date' => $requestedDate,
+            'reason' => 'I cannot attend the scheduled date.',
+        ])->assertCreated()
+            ->assertJsonPath('status', 'reschedule_requested');
+
+        $admin = $this->createUser('Portal', 'Admin', 'admin-reschedule-limit', 'admin');
+        $this->actingAs($admin, 'admin')
+            ->post(route('admin.handovers.reschedule', $handover), [
+                'decision' => 'reject',
+                'reason' => 'Please attend the original date.',
+            ])->assertRedirect();
+
+        Sanctum::actingAs($owner);
+        $this->postJson("/api/v1/handovers/{$handover->id}/reschedule", [
+            'requested_date' => now()->addDays(6)->toDateString(),
+            'reason' => 'I still cannot attend.',
+        ])->assertCreated()
+            ->assertJsonPath('status', 'unsuccessful');
+
+        $this->assertDatabaseHas('handovers', [
+            'id' => $handover->id,
+            'status' => 'unsuccessful',
+            'reschedule_attempts' => 2,
+        ]);
+        $this->assertDatabaseHas('posts', ['id' => $post->id, 'status' => 'active']);
+
+        $this->actingAs($admin, 'admin')
+            ->get(route('admin.handovers.history'))
+            ->assertOk()
+            ->assertSee('Blue notebook')
+            ->assertSee('Unsuccessful');
     }
 
     /**
