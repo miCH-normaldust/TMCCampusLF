@@ -50,6 +50,20 @@ class ClaimReviewController extends Controller
             );
 
             if ($data['decision'] === 'approve') {
+                $post->claimRequests()
+                    ->whereNotNull('owner_decision_batch_id')
+                    ->update([
+                        'owner_decision_batch_id' => null,
+                        'owner_decision_batch_winner_id' => null,
+                    ]);
+                abort_if(
+                    $post->claimRequests()
+                        ->where('id', '!=', $claim->id)
+                        ->where('status', 'approved')
+                        ->exists(),
+                    409,
+                    'Another claim for this item has already been approved.',
+                );
                 $claim->update([
                     'status' => 'approved',
                     'reviewed_by' => $request->user('admin')->id,

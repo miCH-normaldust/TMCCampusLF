@@ -17,6 +17,8 @@ class LostSighting extends Model
         'author_decision',
         'admin_decision',
         'admin_reason',
+        'owner_decision_batch_id',
+        'owner_decision_batch_winner_id',
     ];
 
     public function post(): BelongsTo

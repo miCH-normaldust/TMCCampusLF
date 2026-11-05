@@ -22,6 +22,174 @@ class EngagementWorkflowTest extends TestCase
 {
     use RefreshDatabase;
 
+    public function test_owner_approval_rejects_other_claims_for_the_same_post(): void
+    {
+        [$owner, $firstClaimant, $category, $location] = $this->createParticipants();
+        $secondClaimant = $this->createUser('Second', 'Claimant', 'second-claimant');
+        $post = $this->createPost($owner, $category, $location, 'found');
+        $approvedClaim = ClaimRequest::create([
+            'post_id' => $post->id,
+            'claimant_id' => $firstClaimant->id,
+            'answers' => ['matches'],
+            'attempt_no' => 1,
+            'status' => 'pending',
+            'author_decision' => 'pending',
+        ]);
+        $otherClaim = ClaimRequest::create([
+            'post_id' => $post->id,
+            'claimant_id' => $secondClaimant->id,
+            'answers' => ['does not match'],
+            'attempt_no' => 1,
+            'status' => 'pending',
+            'author_decision' => 'pending',
+        ]);
+
+        Sanctum::actingAs($owner);
+        $this->patchJson("/api/v1/claims/{$approvedClaim->id}/post-author-decision", [
+            'decision' => 'approve',
+            'reason' => 'The identifying details match.',
+        ])->assertOk()
+            ->assertJsonPath('decision', 'approve');
+
+        $this->assertDatabaseHas('claim_requests', [
+            'id' => $approvedClaim->id,
+            'status' => 'pending',
+            'author_decision' => 'approved',
+        ]);
+        $this->assertDatabaseHas('claim_requests', [
+            'id' => $otherClaim->id,
+            'status' => 'rejected',
+            'author_decision' => 'rejected',
+            'author_decision_reason' => 'Another claim was approved for this item.',
+        ]);
+        $this->assertDatabaseHas('notifications', [
+            'notifiable_id' => $secondClaimant->id,
+            'type' => 'claim_owner_rejected',
+        ]);
+        $admin = $this->createUser('Claims', 'Status', 'claim-status-admin', 'admin');
+        $this->actingAs($admin, 'admin')
+            ->get(route('admin.claims.index'))
+            ->assertOk()
+            ->assertSee('Approved by owner · Awaiting admin')
+            ->assertSee('Rejected');
+        Sanctum::actingAs($owner);
+        $this->patchJson("/api/v1/claims/{$approvedClaim->id}/post-author-decision/undo")
+            ->assertOk();
+        $this->assertDatabaseHas('claim_requests', [
+            'id' => $approvedClaim->id,
+            'status' => 'pending',
+            'author_decision' => 'pending',
+            'owner_decision_batch_id' => null,
+        ]);
+        $this->assertDatabaseHas('claim_requests', [
+            'id' => $otherClaim->id,
+            'status' => 'pending',
+            'author_decision' => 'pending',
+            'owner_decision_batch_id' => null,
+        ]);
+        $this->patchJson("/api/v1/claims/{$approvedClaim->id}/post-author-decision", [
+            'decision' => 'approve',
+            'reason' => 'The identifying details still match.',
+        ])->assertOk();
+        $this->actingAs($admin, 'admin')
+            ->post(route('admin.claims.decide', $approvedClaim->id), [
+                'decision' => 'approve',
+                'reason' => 'The claim was verified.',
+            ])->assertRedirect();
+        $this->assertDatabaseHas('claim_requests', [
+            'id' => $approvedClaim->id,
+            'owner_decision_batch_id' => null,
+        ]);
+        Sanctum::actingAs($owner);
+        $this->patchJson("/api/v1/claims/{$approvedClaim->id}/post-author-decision/undo")
+            ->assertConflict();
+    }
+
+    public function test_owner_can_nudge_admin_about_a_claim_until_final_review(): void
+    {
+        [$owner, $claimant, $category, $location] = $this->createParticipants();
+        $post = $this->createPost($owner, $category, $location, 'found');
+        $claim = ClaimRequest::create([
+            'post_id' => $post->id,
+            'claimant_id' => $claimant->id,
+            'answers' => ['matches'],
+            'attempt_no' => 1,
+            'status' => 'pending',
+            'author_decision' => 'approved',
+            'owner_decision_batch_id' => (string) \Illuminate\Support\Str::uuid(),
+        ]);
+        $claim->update(['owner_decision_batch_winner_id' => $claim->id]);
+        $admin = $this->createUser('Claim', 'Admin', 'claim-nudge-admin', 'admin');
+
+        Sanctum::actingAs($owner);
+        $response = $this->postJson("/api/v1/claims/{$claim->id}/admin-conversation", [
+            'body' => 'Please review this approved claim.',
+        ])->assertCreated()
+            ->assertJsonPath('type', 'admin')
+            ->assertJsonPath('item_name', 'Admin support · '.$post->item_name);
+
+        $conversationId = $response->json('id');
+        $this->assertDatabaseHas('conversations', [
+            'id' => $conversationId,
+            'support_user_id' => $owner->id,
+            'support_claim_id' => $claim->id,
+        ]);
+        $this->assertDatabaseHas('notifications', [
+            'notifiable_id' => $admin->id,
+            'type' => 'admin_chat_message',
+        ]);
+        $this->getJson('/api/v1/claims/awaiting-post-author')
+            ->assertOk()
+            ->assertJsonPath('data.0.id', $claim->id);
+
+        $this->actingAs($admin, 'admin')
+            ->post(route('admin.claims.decide', $claim->id), [
+                'decision' => 'reject',
+                'reason' => 'The submitted evidence does not establish ownership.',
+            ])->assertRedirect();
+        Sanctum::actingAs($owner);
+        $this->getJson('/api/v1/claims/awaiting-post-author')
+            ->assertOk()
+            ->assertJsonPath('data.0.id', $claim->id)
+            ->assertJsonPath('data.0.status', 'rejected')
+            ->assertJsonPath('data.0.review_reason', 'The submitted evidence does not establish ownership.')
+            ->assertJsonPath('data.0.can_undo_owner_decision', false);
+
+        $approvedPost = $this->createPost($owner, $category, $location, 'found');
+        $finallyApprovedClaim = ClaimRequest::create([
+            'post_id' => $approvedPost->id,
+            'claimant_id' => $claimant->id,
+            'answers' => ['matches'],
+            'attempt_no' => 1,
+            'status' => 'pending',
+            'author_decision' => 'approved',
+            'owner_decision_batch_id' => (string) \Illuminate\Support\Str::uuid(),
+        ]);
+        $finallyApprovedClaim->update([
+            'owner_decision_batch_winner_id' => $finallyApprovedClaim->id,
+        ]);
+        $rejectedSibling = ClaimRequest::create([
+            'post_id' => $approvedPost->id,
+            'claimant_id' => $this->createUser('Second', 'Claimant', 'approved-post-sibling')->id,
+            'answers' => ['does not match'],
+            'attempt_no' => 1,
+            'status' => 'pending',
+            'author_decision' => 'pending',
+        ]);
+        $this->actingAs($admin, 'admin')
+            ->post(route('admin.claims.decide', $finallyApprovedClaim->id), [
+                'decision' => 'approve',
+                'reason' => 'The claim was verified.',
+            ])->assertRedirect();
+        Sanctum::actingAs($owner);
+        $remainingClaims = $this->getJson('/api/v1/claims/awaiting-post-author')
+            ->assertOk()
+            ->json('data');
+        $this->assertContains($claim->id, array_column($remainingClaims, 'id'));
+        $this->assertNotContains($finallyApprovedClaim->id, array_column($remainingClaims, 'id'));
+        $this->assertContains($rejectedSibling->id, array_column($remainingClaims, 'id'));
+    }
+
     public function test_claim_waits_for_owner_decision_and_can_be_retried_after_rejection(): void
     {
         [$owner, $claimant, $category, $location] = $this->createParticipants();
@@ -41,6 +209,12 @@ class EngagementWorkflowTest extends TestCase
             ->assertJsonPath('attempts_used', 1)
             ->assertJsonPath('can_submit_another', false);
         $claimId = $first->json('claim_id');
+        $this->assertDatabaseHas('claim_requests', [
+            'id' => $claimId,
+            'post_id' => $post->id,
+            'claimant_id' => $claimant->id,
+            'status' => 'pending',
+        ]);
         $this->assertDatabaseHas('posts', [
             'id' => $post->id,
             'status' => 'claim_pending',
@@ -50,7 +224,10 @@ class EngagementWorkflowTest extends TestCase
             ->get(route('admin.claims.index'))
             ->assertOk()
             ->assertSee('post_id='.$post->id, false)
-            ->assertSee('View original post');
+            ->assertSee('View original post')
+            ->assertSee($claimant->first_name.' '.$claimant->last_name)
+            ->assertSee('Awaiting owner')
+            ->assertSee('View claim');
         $this->get(route('admin.claims.show', $claimId))
             ->assertOk()
             ->assertSee('View original post');
@@ -375,6 +552,153 @@ class EngagementWorkflowTest extends TestCase
         $this->getJson('/api/v1/handovers')
             ->assertOk()
             ->assertJsonPath('data.0.type', 'lost');
+    }
+
+    public function test_owner_evidence_decisions_resolve_the_selected_proof_and_reject_siblings(): void
+    {
+        [$owner, $finder, $category, $location] = $this->createParticipants();
+        $secondFinder = $this->createUser('Second', 'Finder', 'second-finder');
+        $post = $this->createPost($owner, $category, $location, 'lost');
+        $approvedEvidence = LostSighting::create([
+            'post_id' => $post->id,
+            'user_id' => $finder->id,
+            'answer' => 'yes',
+            'evidence_text' => 'I found this item.',
+            'author_decision' => 'pending',
+            'admin_decision' => 'pending',
+        ]);
+        $otherEvidence = LostSighting::create([
+            'post_id' => $post->id,
+            'user_id' => $secondFinder->id,
+            'answer' => 'yes',
+            'evidence_text' => 'I also found this item.',
+            'author_decision' => 'pending',
+            'admin_decision' => 'pending',
+        ]);
+
+        Sanctum::actingAs($owner);
+        $this->patchJson("/api/v1/sightings/{$approvedEvidence->id}", [
+            'decision' => 'approve',
+        ])->assertOk();
+
+        $this->assertDatabaseHas('lost_sightings', [
+            'id' => $approvedEvidence->id,
+            'author_decision' => 'approved',
+            'admin_decision' => 'pending',
+        ]);
+        $this->assertDatabaseHas('lost_sightings', [
+            'id' => $otherEvidence->id,
+            'author_decision' => 'rejected',
+            'admin_decision' => 'pending',
+        ]);
+        $this->assertDatabaseHas('notifications', [
+            'notifiable_id' => $secondFinder->id,
+            'type' => 'sighting_owner_reviewed',
+        ]);
+        $admin = $this->createUser('Evidence', 'Status', 'evidence-status-admin', 'admin');
+        $this->actingAs($admin, 'admin')
+            ->get(route('admin.sightings.index'))
+            ->assertOk()
+            ->assertSee('Approved by owner · Awaiting admin')
+            ->assertSee('Rejected');
+        Sanctum::actingAs($owner);
+        $this->patchJson("/api/v1/sightings/{$approvedEvidence->id}/undo-owner-decision")
+            ->assertOk();
+        $this->assertDatabaseHas('lost_sightings', [
+            'id' => $approvedEvidence->id,
+            'author_decision' => 'pending',
+            'admin_decision' => 'pending',
+            'owner_decision_batch_id' => null,
+        ]);
+        $this->assertDatabaseHas('lost_sightings', [
+            'id' => $otherEvidence->id,
+            'author_decision' => 'pending',
+            'admin_decision' => 'pending',
+            'owner_decision_batch_id' => null,
+        ]);
+
+        $rejectionPost = $this->createPost($owner, $category, $location, 'lost');
+        $rejectedEvidence = LostSighting::create([
+            'post_id' => $rejectionPost->id,
+            'user_id' => $finder->id,
+            'answer' => 'yes',
+            'evidence_text' => 'This evidence does not match.',
+            'author_decision' => 'pending',
+            'admin_decision' => 'pending',
+        ]);
+        $this->patchJson("/api/v1/sightings/{$rejectedEvidence->id}", [
+            'decision' => 'reject',
+        ])->assertOk();
+        $this->assertDatabaseHas('lost_sightings', [
+            'id' => $rejectedEvidence->id,
+            'author_decision' => 'rejected',
+            'admin_decision' => 'pending',
+        ]);
+    }
+
+    public function test_admin_approval_rejects_other_pending_evidence_for_the_same_post(): void
+    {
+        [$owner, $finder, $category, $location] = $this->createParticipants();
+        $secondFinder = $this->createUser('Second', 'Finder', 'admin-review-second-finder');
+        $post = $this->createPost($owner, $category, $location, 'lost');
+        $approvedEvidence = LostSighting::create([
+            'post_id' => $post->id,
+            'user_id' => $finder->id,
+            'answer' => 'yes',
+            'evidence_text' => 'Owner approved evidence.',
+            'author_decision' => 'approved',
+            'admin_decision' => 'pending',
+        ]);
+        $approvedEvidence->update([
+            'owner_decision_batch_id' => '11111111-1111-4111-8111-111111111111',
+            'owner_decision_batch_winner_id' => $approvedEvidence->id,
+        ]);
+        $otherEvidence = LostSighting::create([
+            'post_id' => $post->id,
+            'user_id' => $secondFinder->id,
+            'answer' => 'yes',
+            'evidence_text' => 'Another owner-approved evidence.',
+            'author_decision' => 'approved',
+            'admin_decision' => 'pending',
+        ]);
+        $admin = $this->createUser('Evidence', 'Admin', 'evidence-final-review', 'admin');
+
+        $this->actingAs($admin, 'admin')
+            ->post(route('admin.sightings.decide', $approvedEvidence->id), [
+                'decision' => 'approve',
+                'reason' => 'The evidence is valid.',
+            ])->assertRedirect();
+
+        $this->assertDatabaseHas('lost_sightings', [
+            'id' => $approvedEvidence->id,
+            'author_decision' => 'approved',
+            'admin_decision' => 'approved',
+        ]);
+        $this->assertDatabaseHas('lost_sightings', [
+            'id' => $otherEvidence->id,
+            'author_decision' => 'approved',
+            'admin_decision' => 'rejected',
+        ]);
+        $this->assertDatabaseHas('lost_sightings', [
+            'id' => $approvedEvidence->id,
+            'owner_decision_batch_id' => null,
+        ]);
+        Sanctum::actingAs($owner);
+        $evidenceInReview = $this->getJson('/api/v1/my-evidence')
+            ->assertOk()
+            ->json('data');
+        $this->assertNotContains($approvedEvidence->id, array_column($evidenceInReview, 'id'));
+        $this->assertContains($otherEvidence->id, array_column($evidenceInReview, 'id'));
+        $postEvidenceInReview = $this->getJson("/api/v1/posts/{$post->id}/sightings")
+            ->assertOk()
+            ->json('data');
+        $this->assertNotContains($approvedEvidence->id, array_column($postEvidenceInReview, 'id'));
+        $this->patchJson("/api/v1/sightings/{$approvedEvidence->id}/undo-owner-decision")
+            ->assertConflict();
+        $this->assertDatabaseHas('notifications', [
+            'notifiable_id' => $secondFinder->id,
+            'type' => 'sighting_owner_reviewed',
+        ]);
     }
 
     public function test_lost_evidence_resubmissions_stop_at_the_configured_per_item_attempt_limit(): void

@@ -58,6 +58,8 @@ Route::prefix('v1')->group(function (): void {
         Route::get('/posts/{post}/my-sighting', [InteractionController::class, 'mySighting']);
         Route::get('/claims/awaiting-post-author', [ClaimController::class, 'awaitingPostAuthor']);
         Route::patch('/claims/{claim}/post-author-decision', [ClaimController::class, 'decideForPostAuthor']);
+        Route::patch('/claims/{claim}/post-author-decision/undo', [ClaimController::class, 'undoPostAuthorDecision']);
+        Route::post('/claims/{claim}/admin-conversation', [ConversationController::class, 'startAdminClaimChat'])->middleware('throttle:10,1');
         Route::post('/posts/{post}/comments', [InteractionController::class, 'comment']);
         Route::delete('/comments/{comment}', [InteractionController::class, 'deleteComment']);
         Route::post('/posts/{post}/reactions', [InteractionController::class, 'react']);
@@ -66,6 +68,7 @@ Route::prefix('v1')->group(function (): void {
         Route::get('/posts/{post}/sightings', [InteractionController::class, 'sightings']);
         Route::post('/sightings/{sighting}/admin-conversation', [ConversationController::class, 'startAdminChat'])->middleware('throttle:10,1');
         Route::patch('/sightings/{sighting}', [InteractionController::class, 'decideSighting']);
+        Route::patch('/sightings/{sighting}/undo-owner-decision', [InteractionController::class, 'undoSightingDecision']);
         Route::get('/notifications', [NotificationController::class, 'index']);
         Route::patch('/notifications/{notification}/read', [NotificationController::class, 'markRead']);
         Route::get('/conversations', [ConversationController::class, 'index']);

@@ -13,6 +13,27 @@
         <div><strong>{{ number_format($handovers->total()) }} {{ \Illuminate\Support\Str::plural('handover outcome', $handovers->total()) }}</strong><p>Every record links back to the original post and shows why the transaction ended.</p></div>
     </div>
 
+    <section class="card">
+        <form class="filter-form compact-filter" method="get" action="{{ route('admin.handovers.history') }}">
+            <label>Status
+                <select name="status">
+                    <option value="" @selected($status === '')>All outcomes</option>
+                    <option value="completed" @selected($status === 'completed')>Completed</option>
+                    <option value="unsuccessful" @selected($status === 'unsuccessful')>Unsuccessful</option>
+                </select>
+            </label>
+            <label>Type
+                <select name="type">
+                    <option value="" @selected($type === '')>All types</option>
+                    <option value="lost" @selected($type === 'lost')>Lost</option>
+                    <option value="found" @selected($type === 'found')>Found</option>
+                </select>
+            </label>
+            <button class="button" type="submit">Filter</button>
+            <a class="button secondary" href="{{ route('admin.handovers.history') }}">Clear</a>
+        </form>
+    </section>
+
     <section class="handover-history-list" aria-label="Completed handovers">
         @forelse ($handovers as $handover)
             @php

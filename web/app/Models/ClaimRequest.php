@@ -20,6 +20,8 @@ class ClaimRequest extends Model
         'reviewed_by',
         'reviewed_at',
         'review_reason',
+        'owner_decision_batch_id',
+        'owner_decision_batch_winner_id',
     ];
 
     protected function casts(): array

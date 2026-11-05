@@ -13,6 +13,7 @@ class Conversation extends Model
         'claim_id',
         'sighting_id',
         'support_user_id',
+        'support_claim_id',
         'support_sighting_id',
         'user_one_id',
         'user_two_id',
@@ -59,6 +60,11 @@ class Conversation extends Model
     public function supportSighting(): BelongsTo
     {
         return $this->belongsTo(LostSighting::class, 'support_sighting_id');
+    }
+
+    public function supportClaim(): BelongsTo
+    {
+        return $this->belongsTo(ClaimRequest::class, 'support_claim_id');
     }
 
     public function messages(): HasMany

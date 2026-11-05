@@ -21,6 +21,111 @@ class LostItemHandoverTest extends TestCase
 {
     use RefreshDatabase;
 
+    public function test_admin_handover_lists_can_filter_by_status_and_post_type(): void
+    {
+        [$owner, $finder, $category, $location] = $this->createParticipants();
+        $lostPost = Post::create([
+            'user_id' => $owner->id,
+            'type' => 'lost',
+            'item_name' => 'Lost type filter item',
+            'description' => 'Lost on campus.',
+            'category_id' => $category->id,
+            'color' => 'Blue',
+            'location_id' => $location->id,
+            'event_date' => today(),
+            'status' => 'handover_pending',
+        ]);
+        $sighting = LostSighting::create([
+            'post_id' => $lostPost->id,
+            'user_id' => $finder->id,
+            'answer' => 'yes',
+            'author_decision' => 'approved',
+            'admin_decision' => 'approved',
+        ]);
+        $foundPost = Post::create([
+            'user_id' => $owner->id,
+            'type' => 'found',
+            'item_name' => 'Found type filter item',
+            'description' => 'Found on campus.',
+            'category_id' => $category->id,
+            'color' => 'Black',
+            'location_id' => $location->id,
+            'event_date' => today(),
+            'status' => 'handover_pending',
+        ]);
+        $claim = ClaimRequest::create([
+            'post_id' => $foundPost->id,
+            'claimant_id' => $finder->id,
+            'answers' => ['blue cover'],
+            'attempt_no' => 1,
+            'status' => 'approved',
+            'author_decision' => 'approved',
+        ]);
+        $completedLostPost = Post::create([
+            'user_id' => $owner->id,
+            'type' => 'lost',
+            'item_name' => 'Completed lost filter item',
+            'description' => 'Lost on campus.',
+            'category_id' => $category->id,
+            'color' => 'Green',
+            'location_id' => $location->id,
+            'event_date' => today(),
+            'status' => 'retrieved',
+        ]);
+        $completedSighting = LostSighting::create([
+            'post_id' => $completedLostPost->id,
+            'user_id' => $finder->id,
+            'answer' => 'yes',
+            'author_decision' => 'approved',
+            'admin_decision' => 'approved',
+        ]);
+        $unsuccessfulFoundPost = Post::create([
+            'user_id' => $owner->id,
+            'type' => 'found',
+            'item_name' => 'Unsuccessful found filter item',
+            'description' => 'Found on campus.',
+            'category_id' => $category->id,
+            'color' => 'White',
+            'location_id' => $location->id,
+            'event_date' => today(),
+            'status' => 'active',
+        ]);
+        $unsuccessfulClaim = ClaimRequest::create([
+            'post_id' => $unsuccessfulFoundPost->id,
+            'claimant_id' => $finder->id,
+            'answers' => ['white label'],
+            'attempt_no' => 1,
+            'status' => 'rejected',
+            'author_decision' => 'rejected',
+        ]);
+        Handover::create(['sighting_id' => $sighting->id, 'status' => 'scheduled']);
+        Handover::create(['claim_id' => $claim->id, 'status' => 'awaiting_participants']);
+        Handover::create(['sighting_id' => $completedSighting->id, 'status' => 'completed']);
+        Handover::create(['claim_id' => $unsuccessfulClaim->id, 'status' => 'unsuccessful']);
+        $admin = $this->createUser('Portal', 'Admin', 'admin-handover-filters', 'admin');
+
+        $this->actingAs($admin, 'admin');
+
+        $this->get(route('admin.handovers.index', ['status' => 'scheduled', 'type' => 'lost']))
+            ->assertOk()
+            ->assertSee('Lost type filter item')
+            ->assertSee('Lost')
+            ->assertDontSee('Found type filter item');
+        $this->get(route('admin.handovers.index', ['status' => 'awaiting_participants', 'type' => 'found']))
+            ->assertOk()
+            ->assertSee('Found type filter item')
+            ->assertSee('Found')
+            ->assertDontSee('Lost type filter item');
+        $this->get(route('admin.handovers.history', ['status' => 'completed', 'type' => 'lost']))
+            ->assertOk()
+            ->assertSee('Completed lost filter item')
+            ->assertDontSee('Found type filter item');
+        $this->get(route('admin.handovers.history', ['status' => 'unsuccessful', 'type' => 'found']))
+            ->assertOk()
+            ->assertSee('Unsuccessful found filter item')
+            ->assertDontSee('Completed lost filter item');
+    }
+
     public function test_lost_handover_button_is_available_to_participants_only(): void
     {
         [$owner, $finder, $category, $location] = $this->createParticipants();

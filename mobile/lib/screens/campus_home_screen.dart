@@ -149,6 +149,8 @@ class _CampusHomeScreenState extends State<CampusHomeScreen> {
   int _inboxRefreshKey = 0;
   int _profileRefreshKey = 0;
   int _postRefreshKey = 0;
+  final ScrollController _feedScrollController = ScrollController();
+  int? _returnToInboxTab;
 
   @override
   void initState() {
@@ -180,7 +182,134 @@ class _CampusHomeScreenState extends State<CampusHomeScreen> {
   }
 
   void _refreshFeed() {
-    setState(() => _posts = _fetchPosts());
+    setState(() {
+      _posts = _fetchPosts();
+    });
+  }
+
+  Future<CampusPost?> _findOwnPost(int postId) async {
+    var page = 1;
+    while (true) {
+      final response = await widget.api.dio.get<Map<String, dynamic>>(
+        '/my-posts',
+        queryParameters: {'page': page},
+      );
+      final payload = response.data;
+      final data = payload?['data'];
+      if (data is! List) {
+        throw const FormatException('The posts response is invalid.');
+      }
+      for (final item in data.whereType<Map<String, dynamic>>()) {
+        final post = CampusPost.fromJson(item);
+        if (post.id == postId) return post;
+      }
+
+      final meta = payload?['meta'];
+      final lastPage = meta is Map
+          ? int.tryParse('${meta['last_page']}') ?? page
+          : page;
+      if (page >= lastPage) return null;
+      page++;
+    }
+  }
+
+  Future<CampusPost> _loadPostForFeed(
+    int postId, {
+    required bool isOwner,
+  }) async {
+    if (isOwner) {
+      final ownPost = await _findOwnPost(postId);
+      if (ownPost != null) return ownPost;
+    }
+
+    final response = await widget.api.dio.get<Map<String, dynamic>>(
+      '/posts/$postId',
+    );
+    final rawPost = response.data?['data'];
+    final postData = rawPost is Map<String, dynamic> ? rawPost : response.data;
+    if (postData == null || postData['id'] is! int) {
+      throw const FormatException('The post response is invalid.');
+    }
+    return CampusPost.fromJson(postData);
+  }
+
+  Future<void> _openPostInFeed(
+    int postId, {
+    required bool isOwner,
+    int? returnInboxTab,
+  }) async {
+    late final CampusPost post;
+    try {
+      post = await _loadPostForFeed(postId, isOwner: isOwner);
+    } on DioException catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(widget.api.errorMessage(error))));
+      }
+      return;
+    } on FormatException catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(error.message)));
+      }
+      return;
+    } on TypeError {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('The post response is invalid.')),
+        );
+      }
+      return;
+    }
+
+    if (!mounted) return;
+    _homeSearchController.clear();
+    setState(() {
+      _tab = 0;
+      _openHandovers = false;
+      _returnToInboxTab = returnInboxTab;
+      _communityMode = 0;
+      _type = '';
+      _search = '';
+      _status = '';
+      _sort = 'latest';
+      _categoryId = null;
+      _posts = Future.value([post]);
+    });
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (_feedScrollController.hasClients) {
+        _feedScrollController.jumpTo(0);
+      }
+    });
+
+    try {
+      final feedPosts = await _fetchPosts();
+      if (!mounted) return;
+      setState(() {
+        _posts = Future.value([
+          post,
+          ...feedPosts.where((feedPost) => feedPost.id != postId),
+        ]);
+      });
+    } on DioException catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(widget.api.errorMessage(error))));
+      }
+    } on FormatException catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(error.message)));
+      }
+    } on TypeError {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('The feed response is invalid.')),
+        );
+      }
+    }
   }
 
   CampusPost _postWithReaction(CampusPost post) =>
@@ -278,7 +407,11 @@ class _CampusHomeScreenState extends State<CampusHomeScreen> {
   void _searchPeople(String _) {
     _peopleSearchTimer?.cancel();
     _peopleSearchTimer = Timer(const Duration(milliseconds: 300), () {
-      if (mounted) setState(() => _people = _fetchPeople());
+      if (mounted) {
+        setState(() {
+          _people = _fetchPeople();
+        });
+      }
     });
   }
 
@@ -511,6 +644,7 @@ class _CampusHomeScreenState extends State<CampusHomeScreen> {
     _homeSearchController.dispose();
     _peopleSearchController.dispose();
     _peopleSearchTimer?.cancel();
+    _feedScrollController.dispose();
     super.dispose();
   }
 
@@ -549,6 +683,7 @@ class _CampusHomeScreenState extends State<CampusHomeScreen> {
           ),
           api: widget.api,
           onOpenProfile: _openUserProfile,
+          onOpenPost: _openPostInFeed,
           initialTab: _openHandovers ? 2 : 0,
         ),
       ),
@@ -569,6 +704,18 @@ class _CampusHomeScreenState extends State<CampusHomeScreen> {
     ];
     return Scaffold(
       appBar: AppBar(
+        leading: _returnToInboxTab == null
+            ? null
+            : IconButton(
+                tooltip: _returnToInboxTab == 3
+                    ? 'Back to claims'
+                    : 'Back to evidence',
+                onPressed: () => setState(() {
+                  _tab = 2;
+                  _returnToInboxTab = null;
+                }),
+                icon: const Icon(Icons.arrow_back),
+              ),
         title: Row(
           children: [
             const CampusLfBrandMark(),
@@ -596,6 +743,7 @@ class _CampusHomeScreenState extends State<CampusHomeScreen> {
           }
           setState(() {
             _tab = index;
+            _returnToInboxTab = null;
             if (index != 2) _openHandovers = false;
           });
         },
@@ -627,6 +775,7 @@ class _CampusHomeScreenState extends State<CampusHomeScreen> {
 
   Widget _feedPage() {
     return CustomScrollView(
+      controller: _feedScrollController,
       slivers: [
         SliverToBoxAdapter(
           child: Padding(
@@ -1081,7 +1230,9 @@ class _CampusHomeScreenState extends State<CampusHomeScreen> {
               title: 'Could not load people',
               message: widget.api.errorMessage(snapshot.error!),
               action: FilledButton.tonal(
-                onPressed: () => setState(() => _people = _fetchPeople()),
+                onPressed: () => setState(() {
+                  _people = _fetchPeople();
+                }),
                 child: const Text('Try again'),
               ),
             ),
@@ -1183,7 +1334,7 @@ class _PostCard extends StatelessWidget {
         ? 'Handover'
         : found
         ? post.hasSubmittedClaim
-              ? 'View Submitted Claim'
+              ? 'Check claim status'
               : 'Claim'
         : 'I found it';
     return Card(
@@ -1409,14 +1560,21 @@ class _PostCard extends StatelessWidget {
                         !post.isMine &&
                         (post.type != 'found' ||
                             post.status != 'handover_pending')))
-                  FilledButton.tonal(
-                    onPressed: onPrimaryAction,
-                    style: FilledButton.styleFrom(
-                      minimumSize: const Size(0, 38),
-                      padding: const EdgeInsets.symmetric(horizontal: 13),
-                      visualDensity: VisualDensity.compact,
+                  Flexible(
+                    child: FilledButton.tonal(
+                      onPressed: onPrimaryAction,
+                      style: FilledButton.styleFrom(
+                        minimumSize: const Size(0, 38),
+                        padding: const EdgeInsets.symmetric(horizontal: 8),
+                        visualDensity: VisualDensity.compact,
+                      ),
+                      child: Text(
+                        primaryLabel,
+                        maxLines: 1,
+                        softWrap: false,
+                        overflow: TextOverflow.ellipsis,
+                      ),
                     ),
-                    child: Text(primaryLabel),
                   ),
               ],
             ),
@@ -1741,6 +1899,7 @@ class _PostDetailSheetState extends State<_PostDetailSheet> {
   bool _busy = false;
   double _claimUploadProgress = 0;
   bool _claimUploadSent = false;
+  String? _claimFeedback;
   String? _message;
   bool _loadingOwnClaim = false;
   bool _claimSubmitted = false;
@@ -1828,6 +1987,7 @@ class _PostDetailSheetState extends State<_PostDetailSheet> {
         setState(() {
           _claimSubmitted = true;
           _claimStatusNeedsConfirmation = false;
+          _claimFeedback = null;
           _claimId = claim['id'] as int?;
           _claimCanEdit = claim['editable'] as bool? ?? false;
           _claimRejected = claim['is_rejected'] as bool? ?? false;
@@ -1900,7 +2060,8 @@ class _PostDetailSheetState extends State<_PostDetailSheet> {
           _claimAttemptsUsed = 0;
           _ownClaimImages = [];
           if (preserveSubmitted) {
-            _message = 'No submitted claim was found. You can try submitting again.';
+            _message =
+                'No submitted claim was found. You can try submitting again.';
           }
         });
         if (preserveSubmitted) widget.onClaimChanged?.call();
@@ -1908,8 +2069,7 @@ class _PostDetailSheetState extends State<_PostDetailSheet> {
     } on DioException catch (error) {
       if (mounted) {
         setState(() {
-          _claimStatusNeedsConfirmation =
-              preserveSubmitted && _claimSubmitted;
+          _claimStatusNeedsConfirmation = preserveSubmitted && _claimSubmitted;
           _message = preserveSubmitted && _claimSubmitted
               ? 'Could not confirm your claim status. Check again before submitting another claim.'
               : widget.api.errorMessage(error);
@@ -1980,22 +2140,13 @@ class _PostDetailSheetState extends State<_PostDetailSheet> {
       _busy = true;
       _claimUploadProgress = 0;
       _claimUploadSent = false;
+      _claimFeedback = 'Preparing your claim...';
       _message = 'Preparing your claim...';
     });
     try {
-      final fields = <String, dynamic>{
-        'answers': _answers.map((answer) => answer.text).toList(),
-      };
-      if (_claimPhotos.isNotEmpty) {
-        fields['evidence_images'] = await Future.wait(
-          _claimPhotos.map(
-            (photo) => MultipartFile.fromFile(photo.path, filename: photo.name),
-          ),
-        );
-      }
       final response = await widget.api.dio.post<Map<String, dynamic>>(
         '/posts/${widget.post.id}/claims',
-        data: FormData.fromMap(fields),
+        data: await _claimFormData(),
         options: Options(
           sendTimeout: const Duration(seconds: 90),
           receiveTimeout: const Duration(seconds: 60),
@@ -2005,7 +2156,7 @@ class _PostDetailSheetState extends State<_PostDetailSheet> {
           setState(() {
             _claimUploadSent = total > 0 && sent >= total;
             _claimUploadProgress = total > 0 ? sent / total : 0;
-            _message = _claimUploadSent
+            _claimFeedback = _claimUploadSent
                 ? 'Evidence uploaded. Waiting for the server...'
                 : total > 0
                 ? 'Uploading evidence: ${(100 * sent / total).round()}%'
@@ -2021,6 +2172,8 @@ class _PostDetailSheetState extends State<_PostDetailSheet> {
         setState(() {
           _claimSubmitted = true;
           _claimStatusNeedsConfirmation = false;
+          _claimFeedback =
+              response.data?['message'] as String? ?? 'Claim sent for review.';
           _claimId = response.data?['claim_id'] as int?;
           _claimCanEdit = response.data?['editable'] as bool? ?? false;
           _claimRejected = false;
@@ -2036,18 +2189,23 @@ class _PostDetailSheetState extends State<_PostDetailSheet> {
       }
     } on DioException catch (error) {
       if (mounted) {
-        setState(() {
-          _claimSubmitted = true;
-          _claimCanEdit = false;
-          _claimCanSubmitAnother = false;
-          _claimStatusNeedsConfirmation = true;
-          _message = 'Claim submission could not be confirmed. Checking its status...';
-          _busy = false;
-        });
-        widget.onClaimChanged?.call();
-        await _loadOwnClaim(preserveSubmitted: true);
-        if (mounted && !_claimSubmitted) {
-          setState(() => _message = widget.api.errorMessage(error));
+        final statusCode = error.response?.statusCode;
+        if (statusCode != null && statusCode >= 400 && statusCode < 500) {
+          setState(() => _claimFeedback = widget.api.errorMessage(error));
+        } else {
+          setState(() {
+            _claimSubmitted = true;
+            _claimCanEdit = false;
+            _claimCanSubmitAnother = false;
+            _claimStatusNeedsConfirmation = true;
+            _claimFeedback = 'Claim submission could not be confirmed. Checking its status...';
+            _busy = false;
+          });
+          widget.onClaimChanged?.call();
+          await _loadOwnClaim(preserveSubmitted: true);
+          if (mounted && !_claimSubmitted) {
+            setState(() => _claimFeedback = widget.api.errorMessage(error));
+          }
         }
       }
     } finally {
@@ -2062,18 +2220,51 @@ class _PostDetailSheetState extends State<_PostDetailSheet> {
   }
 
   Future<void> _pickClaimPhotos() async {
-    final photos = await ImagePicker().pickMultiImage(imageQuality: 85);
+    final photos = await ImagePicker().pickMultiImage(
+      imageQuality: 85,
+      maxWidth: 1600,
+      maxHeight: 1600,
+    );
     if (!mounted || photos.isEmpty) return;
     if (photos.length > 5) {
-      setState(() => _message = 'Choose no more than five photos.');
+      setState(() => _claimFeedback = 'Choose no more than five photos.');
       return;
     }
+    for (final photo in photos) {
+      if (await photo.length() > 5 * 1024 * 1024) {
+        if (!mounted) return;
+        setState(() {
+          _claimFeedback =
+              '${photo.name} is larger than 5 MB. Choose a smaller photo.';
+        });
+        return;
+      }
+    }
+    if (!mounted) return;
     setState(() {
       _claimPhotos
         ..clear()
         ..addAll(photos);
+      _claimFeedback = null;
       _message = null;
     });
+  }
+
+  Future<FormData> _claimFormData({bool patch = false}) async {
+    final fields = <String, dynamic>{
+      for (var index = 0; index < _answers.length; index++)
+        'answers[$index]': _answers[index].text,
+      if (patch) '_method': 'PATCH',
+    };
+    for (var index = 0; index < _claimPhotos.length; index++) {
+      final photo = _claimPhotos[index];
+      fields['evidence_images[$index]'] = await MultipartFile.fromFile(
+        photo.path,
+        filename: photo.name,
+      );
+    }
+
+    return FormData.fromMap(fields);
   }
 
   void _beginClaimEdit() {
@@ -2108,20 +2299,9 @@ class _PostDetailSheetState extends State<_PostDetailSheet> {
       _message = 'Preparing your claim changes...';
     });
     try {
-      final fields = <String, dynamic>{
-        '_method': 'PATCH',
-        'answers': _answers.map((answer) => answer.text).toList(),
-      };
-      if (_claimPhotos.isNotEmpty) {
-        fields['evidence_images'] = await Future.wait(
-          _claimPhotos.map(
-            (photo) => MultipartFile.fromFile(photo.path, filename: photo.name),
-          ),
-        );
-      }
       final response = await widget.api.dio.post<Map<String, dynamic>>(
         '/posts/${widget.post.id}/claims/$claimId',
-        data: FormData.fromMap(fields),
+        data: await _claimFormData(patch: true),
         options: Options(
           sendTimeout: const Duration(seconds: 90),
           receiveTimeout: const Duration(seconds: 60),
@@ -2449,15 +2629,14 @@ class _PostDetailSheetState extends State<_PostDetailSheet> {
                         ? null
                         : _beginClaimEdit,
                     icon: const Icon(Icons.edit_outlined),
-                    label: const Text('Edit Claim'),
+                    label: const Text('Edit claim'),
                   ),
                 if (_claimStatusNeedsConfirmation)
                   OutlinedButton.icon(
                     onPressed: _loadingOwnClaim || _busy
                         ? null
-                        : () => unawaited(
-                            _loadOwnClaim(preserveSubmitted: true),
-                          ),
+                        : () =>
+                              unawaited(_loadOwnClaim(preserveSubmitted: true)),
                     icon: const Icon(Icons.refresh),
                     label: const Text('Check claim status'),
                   ),
@@ -2499,6 +2678,11 @@ class _PostDetailSheetState extends State<_PostDetailSheet> {
                                 ? 'Claim attempts used'
                                 : 'Already submitted claim',
                           ),
+                  ),
+                if (_claimFeedback != null)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 8),
+                    child: Text(_claimFeedback!),
                   ),
                 if (_busy && _claimUploadProgress > 0)
                   Padding(
@@ -2844,7 +3028,35 @@ class _SightingReviewSheetState extends State<SightingReviewSheet> {
         '/sightings/$id',
         data: {'decision': decision},
       );
-      if (mounted) setState(() => _sightings = _load());
+      if (mounted) {
+        setState(() {
+          _sightings = _load();
+        });
+      }
+    } on DioException catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(widget.api.errorMessage(error))));
+      }
+    }
+  }
+
+  Future<void> _undoDecision(int id) async {
+    try {
+      await widget.api.dio.patch<void>('/sightings/$id/undo-owner-decision');
+      if (mounted) {
+        setState(() {
+          _sightings = _load();
+        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Evidence decision undone. The affected evidence is awaiting review again.',
+            ),
+          ),
+        );
+      }
     } on DioException catch (error) {
       if (mounted) {
         ScaffoldMessenger.of(
@@ -2860,7 +3072,9 @@ class _SightingReviewSheetState extends State<SightingReviewSheet> {
         '/sightings/$id/handover',
       );
       if (mounted) {
-        setState(() => _sightings = _load());
+        setState(() {
+          _sightings = _load();
+        });
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text(
@@ -2963,6 +3177,39 @@ class _SightingReviewSheetState extends State<SightingReviewSheet> {
                                   ),
                                 ),
                               ],
+                            ),
+                          if (sighting['can_undo_owner_decision'] == true)
+                            OutlinedButton.icon(
+                              onPressed: () async {
+                                final confirmed = await showDialog<bool>(
+                                  context: context,
+                                  builder: (dialogContext) => AlertDialog(
+                                    title: const Text(
+                                      'Undo evidence decision?',
+                                    ),
+                                    content: const Text(
+                                      'This will return this evidence and any evidence rejected because of it to owner review.',
+                                    ),
+                                    actions: [
+                                      TextButton(
+                                        onPressed: () =>
+                                            Navigator.pop(dialogContext, false),
+                                        child: const Text('Cancel'),
+                                      ),
+                                      FilledButton(
+                                        onPressed: () =>
+                                            Navigator.pop(dialogContext, true),
+                                        child: const Text('Undo'),
+                                      ),
+                                    ],
+                                  ),
+                                );
+                                if (confirmed == true) {
+                                  await _undoDecision(sighting['id'] as int);
+                                }
+                              },
+                              icon: const Icon(Icons.undo),
+                              label: const Text('Undo decision'),
                             ),
                           if (sighting['admin_decision'] == 'approved' &&
                               sighting['handover_id'] == null)
@@ -3639,15 +3886,146 @@ class InboxScreen extends StatefulWidget {
   const InboxScreen({
     required this.api,
     required this.onOpenProfile,
+    required this.onOpenPost,
     this.initialTab = 0,
     super.key,
   });
   final ApiClient api;
   final Future<void> Function(int) onOpenProfile;
+  final Future<void> Function(int, {required bool isOwner, int? returnInboxTab})
+  onOpenPost;
   final int initialTab;
 
   @override
   State<InboxScreen> createState() => _InboxScreenState();
+}
+
+class _ClaimDecisionDialog extends StatefulWidget {
+  const _ClaimDecisionDialog({required this.decision});
+
+  final String decision;
+
+  @override
+  State<_ClaimDecisionDialog> createState() => _ClaimDecisionDialogState();
+}
+
+class _ClaimDecisionDialogState extends State<_ClaimDecisionDialog> {
+  final _reasonController = TextEditingController();
+  String? _reasonError;
+
+  @override
+  void dispose() {
+    _reasonController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: Text(
+        widget.decision == 'approve'
+            ? 'Approve this claim?'
+            : 'Decline this claim?',
+      ),
+      content: TextField(
+        controller: _reasonController,
+        maxLength: 1000,
+        maxLines: 3,
+        onChanged: (_) {
+          if (_reasonError != null) {
+            setState(() {
+              _reasonError = null;
+            });
+          }
+        },
+        decoration: InputDecoration(
+          labelText: 'Reason for your decision (required)',
+          alignLabelWithHint: true,
+          errorText: _reasonError,
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          onPressed: () {
+            final value = _reasonController.text.trim();
+            if (value.isEmpty) {
+              setState(() {
+                _reasonError = 'A reason is required.';
+              });
+              return;
+            }
+            Navigator.pop(context, value);
+          },
+          child: const Text('Submit decision'),
+        ),
+      ],
+    );
+  }
+}
+
+class _HandoverRescheduleDialog extends StatefulWidget {
+  const _HandoverRescheduleDialog();
+
+  @override
+  State<_HandoverRescheduleDialog> createState() =>
+      _HandoverRescheduleDialogState();
+}
+
+class _HandoverRescheduleDialogState extends State<_HandoverRescheduleDialog> {
+  final _dateController = TextEditingController();
+  final _reasonController = TextEditingController();
+
+  @override
+  void dispose() {
+    _dateController.dispose();
+    _reasonController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      scrollable: true,
+      title: const Text('Request a handover reschedule'),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          TextField(
+            controller: _dateController,
+            keyboardType: TextInputType.datetime,
+            decoration: const InputDecoration(
+              labelText: 'Requested date',
+              hintText: 'YYYY-MM-DD',
+            ),
+          ),
+          TextField(
+            controller: _reasonController,
+            maxLines: 3,
+            decoration: const InputDecoration(
+              labelText: 'Message to TMC administrators',
+            ),
+          ),
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.pop(context, {
+            'requested_date': _dateController.text.trim(),
+            'reason': _reasonController.text.trim(),
+          }),
+          child: const Text('Send request'),
+        ),
+      ],
+    );
+  }
 }
 
 class _InboxScreenState extends State<InboxScreen> {
@@ -3738,7 +4116,11 @@ class _InboxScreenState extends State<InboxScreen> {
   Future<void> _markRead(String id) async {
     try {
       await widget.api.dio.patch<void>('/notifications/$id/read');
-      if (mounted) setState(() => _notifications = _load());
+      if (mounted) {
+        setState(() {
+          _notifications = _load();
+        });
+      }
     } on DioException catch (error) {
       if (mounted) {
         ScaffoldMessenger.of(
@@ -3748,37 +4130,15 @@ class _InboxScreenState extends State<InboxScreen> {
     }
   }
 
-  Future<void> _openOriginPost(int postId) async {
-    try {
-      final response = await widget.api.dio.get<Map<String, dynamic>>(
-        '/posts/$postId',
-      );
-      final postData = response.data?['data'] is Map<String, dynamic>
-          ? response.data!['data'] as Map<String, dynamic>
-          : response.data;
-      if (postData == null || !mounted) return;
-      await showModalBottomSheet<void>(
-        context: context,
-        isScrollControlled: true,
-        builder: (_) => _PostDetailSheet(
-          api: widget.api,
-          post: CampusPost.fromJson(postData),
-          onOpenProfile: widget.onOpenProfile,
-        ),
-      );
-    } on DioException catch (error) {
-      if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text(widget.api.errorMessage(error))));
-      }
-    } on FormatException catch (error) {
-      if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text(error.message)));
-      }
-    }
-  }
+  Future<void> _openOriginPost(
+    int postId, {
+    required bool isOwner,
+    int? returnInboxTab,
+  }) => widget.onOpenPost(
+    postId,
+    isOwner: isOwner,
+    returnInboxTab: returnInboxTab,
+  );
 
   Future<void> _openNotification(Map<String, dynamic> notification) async {
     final id = notification['id'] as String?;
@@ -3840,7 +4200,7 @@ class _InboxScreenState extends State<InboxScreen> {
 
     final postId = data['post_id'] as int?;
     if (postId == null) return;
-    await _openOriginPost(postId);
+    await _openOriginPost(postId, isOwner: false);
   }
 
   @override
@@ -3916,7 +4276,9 @@ class _InboxScreenState extends State<InboxScreen> {
             title: 'Inbox unavailable',
             message: widget.api.errorMessage(snapshot.error!),
             action: FilledButton.tonal(
-              onPressed: () => setState(() => _notifications = _load()),
+              onPressed: () => setState(() {
+                _notifications = _load();
+              }),
               child: const Text('Try again'),
             ),
           );
@@ -3930,7 +4292,11 @@ class _InboxScreenState extends State<InboxScreen> {
           );
         }
         return RefreshIndicator(
-          onRefresh: () async => setState(() => _notifications = _load()),
+          onRefresh: () async {
+            setState(() {
+              _notifications = _load();
+            });
+          },
           child: ListView.builder(
             padding: const EdgeInsets.all(16),
             itemCount: notifications.length,
@@ -3974,8 +4340,9 @@ class _InboxScreenState extends State<InboxScreen> {
             title: 'Chats unavailable',
             message: widget.api.errorMessage(snapshot.error!),
             action: FilledButton.tonal(
-              onPressed: () =>
-                  setState(() => _conversations = _loadConversations()),
+              onPressed: () => setState(() {
+                _conversations = _loadConversations();
+              }),
               child: const Text('Try again'),
             ),
           );
@@ -4165,6 +4532,42 @@ class _InboxScreenState extends State<InboxScreen> {
           _evidence = _loadEvidence();
           _handovers = _loadHandovers();
         });
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              decision == 'approve'
+                  ? 'Evidence approved. Other pending evidence for this post was rejected.'
+                  : 'Evidence rejected.',
+            ),
+          ),
+        );
+      }
+      return true;
+    } on DioException catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(widget.api.errorMessage(error))));
+      }
+      return false;
+    }
+  }
+
+  Future<bool> _undoEvidenceDecision(int id) async {
+    try {
+      await widget.api.dio.patch<void>('/sightings/$id/undo-owner-decision');
+      if (mounted) {
+        setState(() {
+          _evidence = _loadEvidence();
+          _handovers = _loadHandovers();
+        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Evidence decision undone. The affected evidence is awaiting review again.',
+            ),
+          ),
+        );
       }
       return true;
     } on DioException catch (error) {
@@ -4238,6 +4641,67 @@ class _InboxScreenState extends State<InboxScreen> {
     }
   }
 
+  Future<void> _messageAdminAboutClaim(Map<String, dynamic> claim) async {
+    final message = TextEditingController(
+      text:
+          'Please review the claim for ${claim['item_name'] ?? 'my found item'}. I approved it and believe it is ready for handover.',
+    );
+    try {
+      final body = await showDialog<String>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('Message TMC administrators'),
+          content: TextField(
+            controller: message,
+            maxLines: 4,
+            maxLength: 2000,
+            decoration: const InputDecoration(labelText: 'Message'),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(context, message.text.trim()),
+              child: const Text('Open chat'),
+            ),
+          ],
+        ),
+      );
+      if (body == null || body.isEmpty || !mounted) return;
+      final response = await widget.api.dio.post<Map<String, dynamic>>(
+        '/claims/${claim['id']}/admin-conversation',
+        data: {'body': body},
+      );
+      if (!mounted) return;
+      final conversation = response.data;
+      if (conversation == null) return;
+      setState(() {
+        _tab = 1;
+        _conversationFilter = 'admin';
+        _conversations = _loadConversations();
+      });
+      await Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (_) => ConversationScreen(
+            api: widget.api,
+            conversation: conversation,
+            onOpenProfile: widget.onOpenProfile,
+          ),
+        ),
+      );
+    } on DioException catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(widget.api.errorMessage(error))));
+      }
+    } finally {
+      message.dispose();
+    }
+  }
+
   Widget _evidenceList() {
     return FutureBuilder<List<Map<String, dynamic>>>(
       future: _evidence,
@@ -4251,7 +4715,9 @@ class _InboxScreenState extends State<InboxScreen> {
             title: 'Evidence unavailable',
             message: widget.api.errorMessage(snapshot.error!),
             action: FilledButton.tonal(
-              onPressed: () => setState(() => _evidence = _loadEvidence()),
+              onPressed: () => setState(() {
+                _evidence = _loadEvidence();
+              }),
               child: const Text('Try again'),
             ),
           );
@@ -4267,7 +4733,11 @@ class _InboxScreenState extends State<InboxScreen> {
         final groups = _groupByPost(evidence);
         final postIds = groups.keys.toList();
         return RefreshIndicator(
-          onRefresh: () async => setState(() => _evidence = _loadEvidence()),
+          onRefresh: () async {
+            setState(() {
+              _evidence = _loadEvidence();
+            });
+          },
           child: ListView.separated(
             padding: const EdgeInsets.all(14),
             itemCount: postIds.length,
@@ -4282,6 +4752,25 @@ class _InboxScreenState extends State<InboxScreen> {
                         'pending',
                   )
                   .length;
+              final rejectedCount = items
+                  .where(
+                    (item) =>
+                        (item['author_decision'] as String? ?? 'pending') ==
+                            'rejected' ||
+                        (item['admin_decision'] as String? ?? 'pending') ==
+                            'rejected',
+                  )
+                  .length;
+              final approvedCount = items.where((item) {
+                final authorDecision =
+                    item['author_decision'] as String? ?? 'pending';
+                final adminDecision =
+                    item['admin_decision'] as String? ?? 'pending';
+                return authorDecision != 'rejected' &&
+                    adminDecision != 'rejected' &&
+                    (authorDecision == 'approved' ||
+                        adminDecision == 'approved');
+              }).length;
               return Card(
                 child: Padding(
                   padding: const EdgeInsets.all(14),
@@ -4293,7 +4782,7 @@ class _InboxScreenState extends State<InboxScreen> {
                         style: Theme.of(context).textTheme.titleMedium,
                       ),
                       Text(
-                        '${items.length} handling proof(s) · $pendingCount awaiting your decision',
+                        '${items.length} handling proof(s) · $pendingCount awaiting your decision · $approvedCount approved · $rejectedCount rejected',
                       ),
                       const SizedBox(height: 10),
                       Wrap(
@@ -4301,7 +4790,11 @@ class _InboxScreenState extends State<InboxScreen> {
                         runSpacing: 8,
                         children: [
                           OutlinedButton.icon(
-                            onPressed: () => _openOriginPost(postId),
+                            onPressed: () => _openOriginPost(
+                              postId,
+                              isOwner: true,
+                              returnInboxTab: 4,
+                            ),
                             icon: const Icon(Icons.open_in_new),
                             label: const Text('View Post'),
                           ),
@@ -4351,7 +4844,11 @@ class _InboxScreenState extends State<InboxScreen> {
                   child: Padding(
                     padding: const EdgeInsets.symmetric(horizontal: 16),
                     child: OutlinedButton.icon(
-                      onPressed: () => _openOriginPost(postId),
+                      onPressed: () => _openOriginPost(
+                        postId,
+                        isOwner: true,
+                        returnInboxTab: 4,
+                      ),
                       icon: const Icon(Icons.open_in_new),
                       label: const Text('View Origin Post'),
                     ),
@@ -4369,6 +4866,15 @@ class _InboxScreenState extends State<InboxScreen> {
                           item['author_decision'] as String? ?? 'pending';
                       final adminDecision =
                           item['admin_decision'] as String? ?? 'pending';
+                      final statusLabel =
+                          authorDecision == 'rejected' ||
+                              adminDecision == 'rejected'
+                          ? 'Rejected'
+                          : adminDecision == 'approved'
+                          ? 'Approved'
+                          : authorDecision == 'approved'
+                          ? 'Approved by owner · Awaiting TMC review'
+                          : 'Awaiting owner review';
                       return Card(
                         child: Padding(
                           padding: const EdgeInsets.all(14),
@@ -4376,7 +4882,7 @@ class _InboxScreenState extends State<InboxScreen> {
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               Text(
-                                'Evidence from ${item['finder_first_name'] ?? 'TMC member'} · Owner: $authorDecision · Admin: $adminDecision',
+                                'Evidence from ${item['finder_first_name'] ?? 'TMC member'} · $statusLabel',
                               ),
                               if ((item['evidence_text'] as String? ?? '')
                                   .isNotEmpty)
@@ -4396,7 +4902,58 @@ class _InboxScreenState extends State<InboxScreen> {
                                 ),
                               if (adminDecision != 'approved' &&
                                   adminDecision != 'rejected') ...[
-                                if (authorDecision == 'pending')
+                                if (item['can_undo_owner_decision'] == true)
+                                  OutlinedButton.icon(
+                                    onPressed: () async {
+                                      final confirmed = await showDialog<bool>(
+                                        context: context,
+                                        builder: (dialogContext) => AlertDialog(
+                                          title: const Text(
+                                            'Undo evidence decision?',
+                                          ),
+                                          content: const Text(
+                                            'This will return this evidence and any evidence rejected because of it to owner review.',
+                                          ),
+                                          actions: [
+                                            TextButton(
+                                              onPressed: () => Navigator.pop(
+                                                dialogContext,
+                                                false,
+                                              ),
+                                              child: const Text('Cancel'),
+                                            ),
+                                            FilledButton(
+                                              onPressed: () => Navigator.pop(
+                                                dialogContext,
+                                                true,
+                                              ),
+                                              child: const Text('Undo'),
+                                            ),
+                                          ],
+                                        ),
+                                      );
+                                      if (confirmed != true ||
+                                          !await _undoEvidenceDecision(id)) {
+                                        return;
+                                      }
+                                      final refreshed = await _loadEvidence();
+                                      if (!mounted) return;
+                                      setState(() {
+                                        _evidence = Future.value(refreshed);
+                                      });
+                                      setSheetState(() {
+                                        items = refreshed
+                                            .where(
+                                              (entry) =>
+                                                  entry['post_id'] == postId,
+                                            )
+                                            .toList();
+                                      });
+                                    },
+                                    icon: const Icon(Icons.undo),
+                                    label: const Text('Undo decision'),
+                                  )
+                                else if (authorDecision == 'pending')
                                   Wrap(
                                     spacing: 8,
                                     children: [
@@ -4409,20 +4966,20 @@ class _InboxScreenState extends State<InboxScreen> {
                                             final refreshed =
                                                 await _loadEvidence();
                                             if (!mounted) return;
-                                            setState(
-                                              () => _evidence = Future.value(
+                                            setState(() {
+                                              _evidence = Future.value(
                                                 refreshed,
-                                              ),
-                                            );
-                                            setSheetState(
-                                              () => items = refreshed
+                                              );
+                                            });
+                                            setSheetState(() {
+                                              items = refreshed
                                                   .where(
                                                     (entry) =>
                                                         entry['post_id'] ==
                                                         postId,
                                                   )
-                                                  .toList(),
-                                            );
+                                                  .toList();
+                                            });
                                           }
                                         },
                                         child: const Text('Approve evidence'),
@@ -4436,20 +4993,20 @@ class _InboxScreenState extends State<InboxScreen> {
                                             final refreshed =
                                                 await _loadEvidence();
                                             if (!mounted) return;
-                                            setState(
-                                              () => _evidence = Future.value(
+                                            setState(() {
+                                              _evidence = Future.value(
                                                 refreshed,
-                                              ),
-                                            );
-                                            setSheetState(
-                                              () => items = refreshed
+                                              );
+                                            });
+                                            setSheetState(() {
+                                              items = refreshed
                                                   .where(
                                                     (entry) =>
                                                         entry['post_id'] ==
                                                         postId,
                                                   )
-                                                  .toList(),
-                                            );
+                                                  .toList();
+                                            });
                                           }
                                         },
                                         child: const Text('Reject'),
@@ -4469,7 +5026,7 @@ class _InboxScreenState extends State<InboxScreen> {
                                   ),
                                 ] else ...[
                                   const Text(
-                                    'You declined this evidence. It will not be sent for administrator approval.',
+                                    'This evidence was rejected and is no longer awaiting TMC review.',
                                   ),
                                 ],
                               ],
@@ -4489,53 +5046,10 @@ class _InboxScreenState extends State<InboxScreen> {
   }
 
   Future<bool> _requestAuthorClaimDecision(int id, String decision) async {
-    final reasonController = TextEditingController();
-    String? reasonError;
     final reason = await showDialog<String>(
       context: context,
-      builder: (dialogContext) => StatefulBuilder(
-        builder: (context, setDialogState) => AlertDialog(
-          title: Text(
-            decision == 'approve'
-                ? 'Approve this claim?'
-                : 'Decline this claim?',
-          ),
-          content: TextField(
-            controller: reasonController,
-            maxLength: 1000,
-            maxLines: 3,
-            onChanged: (_) {
-              if (reasonError != null) {
-                setDialogState(() => reasonError = null);
-              }
-            },
-            decoration: InputDecoration(
-              labelText: 'Reason for your decision (required)',
-              alignLabelWithHint: true,
-              errorText: reasonError,
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(dialogContext),
-              child: const Text('Cancel'),
-            ),
-            FilledButton(
-              onPressed: () {
-                final value = reasonController.text.trim();
-                if (value.isEmpty) {
-                  setDialogState(() => reasonError = 'A reason is required.');
-                  return;
-                }
-                Navigator.pop(dialogContext, value);
-              },
-              child: const Text('Submit decision'),
-            ),
-          ],
-        ),
-      ),
+      builder: (_) => _ClaimDecisionDialog(decision: decision),
     );
-    reasonController.dispose();
     if (reason == null || reason.isEmpty) return false;
     return _decideAuthorClaim(id, decision, reason);
   }
@@ -4559,8 +5073,35 @@ class _InboxScreenState extends State<InboxScreen> {
           SnackBar(
             content: Text(
               decision == 'approve'
-                  ? 'You approved the claim. TMC administrators will review it next.'
+                  ? 'Claim approved. Other pending claims for this post were rejected. TMC administrators will review this claim next.'
                   : 'You declined the claim and sent your reason to the claimant.',
+            ),
+          ),
+        );
+      }
+      return true;
+    } on DioException catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(widget.api.errorMessage(error))));
+      }
+      return false;
+    }
+  }
+
+  Future<bool> _undoAuthorClaimDecision(int id) async {
+    try {
+      await widget.api.dio.patch<void>('/claims/$id/post-author-decision/undo');
+      if (mounted) {
+        setState(() {
+          _authorClaims = _loadAuthorClaims();
+          _handovers = _loadHandovers();
+        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Claim decision undone. The affected claims are awaiting review again.',
             ),
           ),
         );
@@ -4589,8 +5130,9 @@ class _InboxScreenState extends State<InboxScreen> {
             title: 'Claim approvals unavailable',
             message: widget.api.errorMessage(snapshot.error!),
             action: FilledButton.tonal(
-              onPressed: () =>
-                  setState(() => _authorClaims = _loadAuthorClaims()),
+              onPressed: () => setState(() {
+                _authorClaims = _loadAuthorClaims();
+              }),
               child: const Text('Try again'),
             ),
           );
@@ -4606,8 +5148,11 @@ class _InboxScreenState extends State<InboxScreen> {
         final groups = _groupByPost(claims);
         final postIds = groups.keys.toList();
         return RefreshIndicator(
-          onRefresh: () async =>
-              setState(() => _authorClaims = _loadAuthorClaims()),
+          onRefresh: () async {
+            setState(() {
+              _authorClaims = _loadAuthorClaims();
+            });
+          },
           child: ListView.separated(
             padding: const EdgeInsets.all(16),
             itemCount: postIds.length,
@@ -4615,6 +5160,14 @@ class _InboxScreenState extends State<InboxScreen> {
             itemBuilder: (context, index) {
               final postId = postIds[index];
               final postClaims = groups[postId]!;
+              final pendingCount = postClaims
+                  .where(
+                    (claim) =>
+                        (claim['author_decision'] as String? ?? 'pending') ==
+                            'pending' &&
+                        (claim['status'] as String? ?? 'pending') == 'pending',
+                  )
+                  .length;
               return Card(
                 child: Padding(
                   padding: const EdgeInsets.all(14),
@@ -4627,7 +5180,7 @@ class _InboxScreenState extends State<InboxScreen> {
                         style: Theme.of(context).textTheme.titleMedium,
                       ),
                       Text(
-                        '${postClaims.length} claim(s) awaiting your decision',
+                        '${postClaims.length} claim(s) · $pendingCount awaiting your decision',
                       ),
                       const SizedBox(height: 10),
                       Wrap(
@@ -4635,7 +5188,11 @@ class _InboxScreenState extends State<InboxScreen> {
                         runSpacing: 8,
                         children: [
                           OutlinedButton.icon(
-                            onPressed: () => _openOriginPost(postId),
+                            onPressed: () => _openOriginPost(
+                              postId,
+                              isOwner: true,
+                              returnInboxTab: 3,
+                            ),
                             icon: const Icon(Icons.open_in_new),
                             label: const Text('View Post'),
                           ),
@@ -4686,7 +5243,11 @@ class _InboxScreenState extends State<InboxScreen> {
                   child: Padding(
                     padding: const EdgeInsets.symmetric(horizontal: 16),
                     child: OutlinedButton.icon(
-                      onPressed: () => _openOriginPost(postId),
+                      onPressed: () => _openOriginPost(
+                        postId,
+                        isOwner: true,
+                        returnInboxTab: 3,
+                      ),
                       icon: const Icon(Icons.open_in_new),
                       label: const Text('View Origin Post'),
                     ),
@@ -4725,6 +5286,21 @@ class _InboxScreenState extends State<InboxScreen> {
                                       .toList()
                                 : const <String>[];
                             final claimId = claim['id'] as int;
+                            final authorDecision =
+                                claim['author_decision'] as String? ??
+                                'pending';
+                            final claimStatus =
+                                claim['status'] as String? ?? 'pending';
+                            final canUndo =
+                                claim['can_undo_owner_decision'] == true;
+                            final statusLabel = claimStatus == 'approved'
+                                ? 'Approved'
+                                : claimStatus == 'rejected' ||
+                                      authorDecision == 'rejected'
+                                ? 'Rejected'
+                                : authorDecision == 'approved'
+                                ? 'Approved by owner · Awaiting TMC review'
+                                : 'Awaiting owner review';
                             return Card(
                               child: Padding(
                                 padding: const EdgeInsets.all(14),
@@ -4732,7 +5308,7 @@ class _InboxScreenState extends State<InboxScreen> {
                                   crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
                                     Text(
-                                      'Claim by $claimant · Attempt ${claim['attempt_no'] ?? 1}',
+                                      'Claim by $claimant · Attempt ${claim['attempt_no'] ?? 1} · $statusLabel',
                                       style: const TextStyle(
                                         fontWeight: FontWeight.w700,
                                       ),
@@ -4770,67 +5346,165 @@ class _InboxScreenState extends State<InboxScreen> {
                                       ),
                                       const SizedBox(height: 8),
                                     ],
-                                    const Text(
-                                      'Your decision and reason will be sent to the claimant. If approved, TMC administrators review the claim next.',
-                                    ),
-                                    const SizedBox(height: 10),
-                                    Wrap(
-                                      spacing: 8,
-                                      children: [
-                                        FilledButton.tonal(
+                                    if (authorDecision == 'pending' &&
+                                        claimStatus == 'pending') ...[
+                                      const Text(
+                                        'Your decision and reason will be sent to the claimant. If approved, TMC administrators review the claim next.',
+                                      ),
+                                      const SizedBox(height: 10),
+                                      Wrap(
+                                        spacing: 8,
+                                        children: [
+                                          FilledButton.tonal(
+                                            onPressed: () async {
+                                              if (await _requestAuthorClaimDecision(
+                                                claimId,
+                                                'approve',
+                                              )) {
+                                                final refreshed =
+                                                    await _loadAuthorClaims();
+                                                if (!mounted) return;
+                                                setState(() {
+                                                  _authorClaims = Future.value(
+                                                    refreshed,
+                                                  );
+                                                });
+                                                setSheetState(() {
+                                                  items = refreshed
+                                                      .where(
+                                                        (entry) =>
+                                                            entry['post_id'] ==
+                                                            postId,
+                                                      )
+                                                      .toList();
+                                                });
+                                              }
+                                            },
+                                            child: const Text('Approve claim'),
+                                          ),
+                                          OutlinedButton(
+                                            onPressed: () async {
+                                              if (await _requestAuthorClaimDecision(
+                                                claimId,
+                                                'reject',
+                                              )) {
+                                                final refreshed =
+                                                    await _loadAuthorClaims();
+                                                if (!mounted) return;
+                                                setState(() {
+                                                  _authorClaims = Future.value(
+                                                    refreshed,
+                                                  );
+                                                });
+                                                setSheetState(() {
+                                                  items = refreshed
+                                                      .where(
+                                                        (entry) =>
+                                                            entry['post_id'] ==
+                                                            postId,
+                                                      )
+                                                      .toList();
+                                                });
+                                              }
+                                            },
+                                            child: const Text('Decline'),
+                                          ),
+                                        ],
+                                      ),
+                                    ] else ...[
+                                      if (canUndo)
+                                        OutlinedButton.icon(
                                           onPressed: () async {
-                                            if (await _requestAuthorClaimDecision(
-                                              claimId,
-                                              'approve',
-                                            )) {
-                                              final refreshed =
-                                                  await _loadAuthorClaims();
-                                              if (!mounted) return;
-                                              setState(
-                                                () => _authorClaims =
-                                                    Future.value(refreshed),
-                                              );
-                                              setSheetState(
-                                                () => items = refreshed
-                                                    .where(
-                                                      (entry) =>
-                                                          entry['post_id'] ==
-                                                          postId,
-                                                    )
-                                                    .toList(),
-                                              );
+                                            final confirmed =
+                                                await showDialog<bool>(
+                                                  context: context,
+                                                  builder: (dialogContext) =>
+                                                      AlertDialog(
+                                                        title: const Text(
+                                                          'Undo claim decision?',
+                                                        ),
+                                                        content: const Text(
+                                                          'This will return this claim and any claims rejected because of it to owner review.',
+                                                        ),
+                                                        actions: [
+                                                          TextButton(
+                                                            onPressed: () =>
+                                                                Navigator.pop(
+                                                                  dialogContext,
+                                                                  false,
+                                                                ),
+                                                            child: const Text(
+                                                              'Cancel',
+                                                            ),
+                                                          ),
+                                                          FilledButton(
+                                                            onPressed: () =>
+                                                                Navigator.pop(
+                                                                  dialogContext,
+                                                                  true,
+                                                                ),
+                                                            child: const Text(
+                                                              'Undo',
+                                                            ),
+                                                          ),
+                                                        ],
+                                                      ),
+                                                );
+                                            if (confirmed != true ||
+                                                !await _undoAuthorClaimDecision(
+                                                  claimId,
+                                                )) {
+                                              return;
                                             }
+                                            final refreshed =
+                                                await _loadAuthorClaims();
+                                            if (!mounted) return;
+                                            setState(() {
+                                              _authorClaims = Future.value(
+                                                refreshed,
+                                              );
+                                            });
+                                            setSheetState(() {
+                                              items = refreshed
+                                                  .where(
+                                                    (entry) =>
+                                                        entry['post_id'] ==
+                                                        postId,
+                                                  )
+                                                  .toList();
+                                            });
                                           },
-                                          child: const Text('Approve claim'),
+                                          icon: const Icon(Icons.undo),
+                                          label: const Text('Undo decision'),
                                         ),
-                                        OutlinedButton(
-                                          onPressed: () async {
-                                            if (await _requestAuthorClaimDecision(
-                                              claimId,
-                                              'reject',
-                                            )) {
-                                              final refreshed =
-                                                  await _loadAuthorClaims();
-                                              if (!mounted) return;
-                                              setState(
-                                                () => _authorClaims =
-                                                    Future.value(refreshed),
-                                              );
-                                              setSheetState(
-                                                () => items = refreshed
-                                                    .where(
-                                                      (entry) =>
-                                                          entry['post_id'] ==
-                                                          postId,
-                                                    )
-                                                    .toList(),
-                                              );
-                                            }
-                                          },
-                                          child: const Text('Decline'),
+                                      if (authorDecision == 'approved' &&
+                                          claimStatus == 'pending') ...[
+                                        const Padding(
+                                          padding: EdgeInsets.only(top: 8),
+                                          child: Text(
+                                            'Waiting for TMC administrators to approve the handover.',
+                                          ),
+                                        ),
+                                        OutlinedButton.icon(
+                                          onPressed: () =>
+                                              _messageAdminAboutClaim(claim),
+                                          icon: const Icon(Icons.support_agent),
+                                          label: const Text('Nudge TMC admins'),
                                         ),
                                       ],
-                                    ),
+                                      if (claimStatus == 'rejected' &&
+                                          (claim['review_reason'] as String?)
+                                                  ?.isNotEmpty ==
+                                              true)
+                                        Padding(
+                                          padding: const EdgeInsets.only(
+                                            top: 8,
+                                          ),
+                                          child: Text(
+                                            'TMC decision: ${claim['review_reason']}',
+                                          ),
+                                        ),
+                                    ],
                                   ],
                                 ),
                               ),
@@ -4852,9 +5526,10 @@ class _InboxScreenState extends State<InboxScreen> {
     final status = handover['status'] as String? ?? 'awaiting_admin';
     final canApprove = _canApproveHandover(handover);
     final receiptCode = handover['receipt_code'] as String?;
-    await showDialog<void>(
+    final requestReschedule = await showDialog<bool>(
       context: context,
       builder: (dialogContext) => AlertDialog(
+        scrollable: true,
         title: Text(handover['item_name'] as String? ?? 'Item handover'),
         content: Column(
           mainAxisSize: MainAxisSize.min,
@@ -4932,10 +5607,7 @@ class _InboxScreenState extends State<InboxScreen> {
             ),
           if (status == 'scheduled')
             OutlinedButton(
-              onPressed: () async {
-                Navigator.pop(dialogContext);
-                await _requestHandoverReschedule(handover);
-              },
+              onPressed: () => Navigator.pop(dialogContext, true),
               child: const Text('Request reschedule'),
             ),
           if (receiptCode != null)
@@ -4966,6 +5638,9 @@ class _InboxScreenState extends State<InboxScreen> {
         ],
       ),
     );
+    if (requestReschedule == true && mounted) {
+      await _requestHandoverReschedule(handover);
+    }
   }
 
   bool _canApproveHandover(Map<String, dynamic> handover) {
@@ -5001,7 +5676,9 @@ class _InboxScreenState extends State<InboxScreen> {
           ),
         ),
       );
-      setState(() => _handovers = _loadHandovers());
+      setState(() {
+        _handovers = _loadHandovers();
+      });
     } on DioException catch (error) {
       if (mounted) {
         ScaffoldMessenger.of(
@@ -5092,49 +5769,10 @@ class _InboxScreenState extends State<InboxScreen> {
   }
 
   Future<void> _requestHandoverReschedule(Map<String, dynamic> handover) async {
-    final date = TextEditingController();
-    final reason = TextEditingController();
     final request = await showDialog<Map<String, String>>(
       context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: const Text('Request a handover reschedule'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(
-              controller: date,
-              keyboardType: TextInputType.datetime,
-              decoration: const InputDecoration(
-                labelText: 'Requested date',
-                hintText: 'YYYY-MM-DD',
-              ),
-            ),
-            TextField(
-              controller: reason,
-              maxLines: 3,
-              decoration: const InputDecoration(
-                labelText: 'Message to TMC administrators',
-              ),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(dialogContext),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(dialogContext, {
-              'requested_date': date.text.trim(),
-              'reason': reason.text.trim(),
-            }),
-            child: const Text('Send request'),
-          ),
-        ],
-      ),
+      builder: (_) => const _HandoverRescheduleDialog(),
     );
-    date.dispose();
-    reason.dispose();
     if (request == null) return;
 
     try {
@@ -5151,7 +5789,9 @@ class _InboxScreenState extends State<InboxScreen> {
           ),
         ),
       );
-      setState(() => _handovers = _loadHandovers());
+      setState(() {
+        _handovers = _loadHandovers();
+      });
     } on DioException catch (error) {
       if (mounted) {
         ScaffoldMessenger.of(
@@ -5174,7 +5814,9 @@ class _InboxScreenState extends State<InboxScreen> {
             title: 'Handovers unavailable',
             message: widget.api.errorMessage(snapshot.error!),
             action: FilledButton.tonal(
-              onPressed: () => setState(() => _handovers = _loadHandovers()),
+              onPressed: () => setState(() {
+                _handovers = _loadHandovers();
+              }),
               child: const Text('Try again'),
             ),
           );
@@ -5188,7 +5830,11 @@ class _InboxScreenState extends State<InboxScreen> {
           );
         }
         return RefreshIndicator(
-          onRefresh: () async => setState(() => _handovers = _loadHandovers()),
+          onRefresh: () async {
+            setState(() {
+              _handovers = _loadHandovers();
+            });
+          },
           child: ListView.builder(
             padding: const EdgeInsets.all(16),
             itemCount: handovers.length,
@@ -5296,7 +5942,11 @@ class _ConversationScreenState extends State<ConversationScreen> {
     _conversation = Map<String, dynamic>.from(widget.conversation);
     _messages = _loadMessages();
     _polling = Timer.periodic(const Duration(seconds: 5), (_) {
-      if (mounted) setState(() => _messages = _loadMessages());
+      if (mounted) {
+        setState(() {
+          _messages = _loadMessages();
+        });
+      }
     });
   }
 
@@ -5377,7 +6027,9 @@ class _ConversationScreenState extends State<ConversationScreen> {
         data: {'body': body},
       );
       _message.clear();
-      setState(() => _messages = _loadMessages());
+      setState(() {
+        _messages = _loadMessages();
+      });
     } on DioException catch (error) {
       if (mounted) {
         ScaffoldMessenger.of(
@@ -5752,7 +6404,11 @@ class _PublicProfileScreenState extends State<PublicProfileScreen> {
       post: post,
       onOpenProfile: widget.onOpenProfile,
       onClaimChanged: () {
-        if (mounted) setState(() => _posts = _loadPosts());
+        if (mounted) {
+          setState(() {
+            _posts = _loadPosts();
+          });
+        }
       },
       onReactionChanged: (reaction, count) {
         if (!mounted) return;
@@ -5938,7 +6594,9 @@ class _PublicProfileScreenState extends State<PublicProfileScreen> {
                   title: 'Could not load posts',
                   message: widget.api.errorMessage(snapshot.error!),
                   action: FilledButton.tonal(
-                    onPressed: () => setState(() => _posts = _loadPosts()),
+                    onPressed: () => setState(() {
+                      _posts = _loadPosts();
+                    }),
                     child: const Text('Try again'),
                   ),
                 );
@@ -6268,7 +6926,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
     var profileSaved = false;
     String? error;
 
-    await showDialog<void>(
+    final updatedProfile = await showDialog<Map<String, dynamic>>(
       context: context,
       builder: (dialogContext) => StatefulBuilder(
         builder: (context, setDialogState) => AlertDialog(
@@ -6411,9 +7069,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
                               )
                             : await _uploadProfilePicture(fields, picture!);
                         if (!mounted || !dialogContext.mounted) return;
-                        setState(() => _profile = response.data);
                         profileSaved = true;
-                        Navigator.pop(dialogContext);
+                        Navigator.pop(dialogContext, response.data);
                       } on DioException catch (exception) {
                         if (dialogContext.mounted) {
                           setDialogState(
@@ -6443,6 +7100,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
         ),
       ),
     );
+    if (updatedProfile != null && mounted) {
+      setState(() => _profile = updatedProfile);
+    }
     firstName.dispose();
     lastName.dispose();
     profileStatus.dispose();

@@ -327,6 +327,7 @@ class InteractionController extends Controller
             'conversation:id,sighting_id',
         ])
             ->where('answer', 'yes')
+            ->where('admin_decision', '!=', 'approved')
             ->whereHas('post', fn ($query) => $query->where('user_id', $request->user()->id))
             ->latest()
             ->paginate(25)
@@ -343,6 +344,19 @@ class InteractionController extends Controller
                 'author_decision' => $sighting->author_decision,
                 'admin_decision' => $sighting->admin_decision,
                 'admin_reason' => $sighting->admin_reason,
+                'can_undo_owner_decision' => $sighting->owner_decision_batch_id !== null
+                    && (int) $sighting->owner_decision_batch_winner_id === $sighting->id
+                    && $sighting->admin_decision === 'pending'
+                    && ! LostSighting::where('post_id', $sighting->post_id)
+                        ->where('owner_decision_batch_id', $sighting->owner_decision_batch_id)
+                        ->whereExists(function ($query): void {
+                            $query->selectRaw('1')
+                                ->from('lost_sightings as newer')
+                                ->whereColumn('newer.post_id', 'lost_sightings.post_id')
+                                ->whereColumn('newer.user_id', 'lost_sightings.user_id')
+                                ->whereColumn('newer.id', '>', 'lost_sightings.id');
+                        })
+                        ->exists(),
                 'conversation_id' => $sighting->conversation?->id,
                 'created_at' => $sighting->created_at,
             ]);
@@ -357,6 +371,7 @@ class InteractionController extends Controller
         return response()->json([
             'data' => $post->sightings()->with(['user:id,first_name', 'handover:id,sighting_id'])
                 ->where('answer', 'yes')
+                ->where('admin_decision', '!=', 'approved')
                 ->latest()
                 ->get()
                 ->map(fn (LostSighting $sighting): array => [
@@ -367,6 +382,19 @@ class InteractionController extends Controller
                     'author_decision' => $sighting->author_decision,
                     'admin_decision' => $sighting->admin_decision,
                     'admin_reason' => $sighting->admin_reason,
+                    'can_undo_owner_decision' => $sighting->owner_decision_batch_id !== null
+                        && (int) $sighting->owner_decision_batch_winner_id === $sighting->id
+                        && $sighting->admin_decision === 'pending'
+                        && ! LostSighting::where('post_id', $sighting->post_id)
+                            ->where('owner_decision_batch_id', $sighting->owner_decision_batch_id)
+                            ->whereExists(function ($query): void {
+                                $query->selectRaw('1')
+                                    ->from('lost_sightings as newer')
+                                    ->whereColumn('newer.post_id', 'lost_sightings.post_id')
+                                    ->whereColumn('newer.user_id', 'lost_sightings.user_id')
+                                    ->whereColumn('newer.id', '>', 'lost_sightings.id');
+                            })
+                            ->exists(),
                     'handover_id' => $sighting->handover?->id,
                     'created_at' => $sighting->created_at,
                 ]),
@@ -375,41 +403,170 @@ class InteractionController extends Controller
 
     public function decideSighting(Request $request, LostSighting $sighting): JsonResponse
     {
-        $sighting->load('post');
-        abort_unless($sighting->post->user_id === $request->user()->id, 403);
-        abort_unless($sighting->answer === 'yes' && $sighting->author_decision === 'pending', 409, 'This evidence has already been reviewed.');
         $data = $request->validate(['decision' => ['required', 'in:approve,reject']]);
-        $sighting->update(['author_decision' => $data['decision'] === 'approve' ? 'approved' : 'rejected']);
-        $admins = User::where('role', 'admin')->where('status', 'active')->get();
-        foreach ($admins as $admin) {
-            $admin->notifications()->create([
+        DB::transaction(function () use ($request, $sighting, $data): void {
+            $post = Post::whereKey($sighting->post_id)->lockForUpdate()->firstOrFail();
+            $sighting = LostSighting::with('user')
+                ->whereKey($sighting->id)
+                ->lockForUpdate()
+                ->firstOrFail();
+            abort_unless($post->user_id === $request->user()->id, 403);
+            abort_unless(
+                $sighting->answer === 'yes' && $sighting->author_decision === 'pending',
+                409,
+                'This evidence has already been reviewed.',
+            );
+
+            $approved = $data['decision'] === 'approve';
+            if ($approved) {
+                abort_if(
+                    $post->sightings()
+                        ->where('id', '!=', $sighting->id)
+                        ->where(fn ($query) => $query
+                            ->where('admin_decision', 'approved')
+                            ->orWhere(fn ($pending) => $pending
+                                ->where('admin_decision', 'pending')
+                                ->where('author_decision', 'approved')))
+                        ->exists(),
+                    409,
+                    'Another evidence submission for this item is already approved or awaiting administrator review.',
+                );
+            }
+            $batchId = (string) Str::uuid();
+
+            $sighting->update([
+                'author_decision' => $approved ? 'approved' : 'rejected',
+                'owner_decision_batch_id' => $batchId,
+                'owner_decision_batch_winner_id' => $sighting->id,
+            ]);
+
+            if ($approved) {
+                $otherSightings = LostSighting::with('user')
+                    ->where('post_id', $post->id)
+                    ->where('answer', 'yes')
+                    ->where('id', '!=', $sighting->id)
+                    ->where('admin_decision', 'pending')
+                    ->where('author_decision', 'pending')
+                    ->lockForUpdate()
+                    ->get();
+                foreach ($otherSightings as $otherSighting) {
+                    $otherSighting->update([
+                        'author_decision' => 'rejected',
+                        'owner_decision_batch_id' => $batchId,
+                        'owner_decision_batch_winner_id' => $sighting->id,
+                    ]);
+                    $otherSighting->user->notifications()->create([
+                        'id' => (string) Str::uuid(),
+                        'type' => 'sighting_owner_reviewed',
+                        'data' => [
+                            'title' => 'Your evidence was not approved',
+                            'body' => 'Another evidence submission for this item was approved by the post owner.',
+                            'sighting_id' => $otherSighting->id,
+                            'post_id' => $post->id,
+                        ],
+                    ]);
+                }
+            }
+
+            if ($approved) {
+                $admins = User::where('role', 'admin')->where('status', 'active')->get();
+                foreach ($admins as $admin) {
+                    $admin->notifications()->create([
+                        'id' => (string) Str::uuid(),
+                        'type' => 'sighting_review',
+                        'data' => [
+                            'title' => 'Lost-item evidence needs review',
+                            'body' => 'The post author approved a sighting for '.$post->item_name.'.',
+                            'sighting_id' => $sighting->id,
+                            'post_id' => $post->id,
+                        ],
+                    ]);
+                }
+            }
+            $sighting->user->notifications()->create([
                 'id' => (string) Str::uuid(),
-                'type' => 'sighting_review',
+                'type' => 'sighting_owner_reviewed',
                 'data' => [
-                    'title' => 'Lost-item evidence needs review',
-                    'body' => $data['decision'] === 'approve'
-                        ? 'The post author approved a sighting for '.$sighting->post->item_name.'.'
-                        : 'The post author rejected a sighting.',
+                    'title' => $approved
+                        ? 'The post owner approved your evidence'
+                        : 'The post owner did not approve your evidence',
+                    'body' => $approved
+                        ? 'Your evidence is now waiting for TMC administrator review.'
+                        : 'The post owner rejected your evidence.',
                     'sighting_id' => $sighting->id,
-                    'post_id' => $sighting->post_id,
+                    'post_id' => $post->id,
                 ],
             ]);
-        }
-        $sighting->user->notifications()->create([
-            'id' => (string) Str::uuid(),
-            'type' => 'sighting_owner_reviewed',
-            'data' => [
-                'title' => $data['decision'] === 'approve'
-                    ? 'The post owner approved your evidence'
-                    : 'The post owner did not approve your evidence',
-                'body' => $data['decision'] === 'approve'
-                    ? 'Your evidence is now waiting for TMC administrator review.'
-                    : 'The post owner reviewed your evidence.',
-                'sighting_id' => $sighting->id,
-                'post_id' => $sighting->post_id,
-            ],
-        ]);
+        });
 
         return response()->json(['message' => 'Your evidence review was recorded.']);
+    }
+
+    public function undoSightingDecision(Request $request, LostSighting $sighting): JsonResponse
+    {
+        DB::transaction(function () use ($request, $sighting): void {
+            $post = Post::whereKey($sighting->post_id)->lockForUpdate()->firstOrFail();
+            $sighting = LostSighting::whereKey($sighting->id)->lockForUpdate()->firstOrFail();
+            abort_unless($post->user_id === $request->user()->id, 403);
+            abort_unless(
+                $sighting->owner_decision_batch_id !== null
+                    && (int) $sighting->owner_decision_batch_winner_id === $sighting->id
+                    && $sighting->admin_decision === 'pending',
+                409,
+                'This evidence decision can no longer be undone.',
+            );
+
+            $batchSightings = LostSighting::where('post_id', $post->id)
+                ->where('owner_decision_batch_id', $sighting->owner_decision_batch_id)
+                ->where('owner_decision_batch_winner_id', $sighting->id)
+                ->lockForUpdate()
+                ->get();
+            abort_unless($batchSightings->isNotEmpty(), 409, 'This evidence decision can no longer be undone.');
+            abort_if(
+                $batchSightings->contains(fn (LostSighting $entry): bool => $entry->admin_decision !== 'pending'),
+                409,
+                'An administrator has already reviewed this evidence.',
+            );
+            abort_if(
+                $batchSightings->contains(fn (LostSighting $entry): bool => LostSighting::where('post_id', $post->id)
+                    ->where('user_id', $entry->user_id)
+                    ->where('id', '>', $entry->id)
+                    ->exists()),
+                409,
+                'Newer evidence has been submitted, so this decision can no longer be undone.',
+            );
+            abort_if(
+                $sighting->author_decision === 'rejected'
+                    && $post->sightings()
+                        ->where('id', '!=', $sighting->id)
+                        ->where('author_decision', 'approved')
+                        ->where('admin_decision', 'pending')
+                        ->exists(),
+                409,
+                'Undo the other approved evidence after administrator review before reopening this evidence.',
+            );
+
+            foreach ($batchSightings as $entry) {
+                $entry->update([
+                    'author_decision' => 'pending',
+                    'owner_decision_batch_id' => null,
+                    'owner_decision_batch_winner_id' => null,
+                ]);
+                $entry->user->notifications()->create([
+                    'id' => (string) Str::uuid(),
+                    'type' => 'sighting_owner_decision_undone',
+                    'data' => [
+                        'title' => 'Evidence decision withdrawn',
+                        'body' => 'The post owner withdrew the decision. Your evidence is awaiting review again.',
+                        'sighting_id' => $entry->id,
+                        'post_id' => $post->id,
+                    ],
+                ]);
+            }
+        });
+
+        return response()->json([
+            'message' => 'The evidence decision was undone. Affected evidence is awaiting review again.',
+        ]);
     }
 }

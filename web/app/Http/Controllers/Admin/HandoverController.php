@@ -18,14 +18,27 @@ use Illuminate\Support\Carbon;
 
 class HandoverController extends Controller
 {
-    public function index(HandoverExpiry $expiry): View
+    public function index(Request $request, HandoverExpiry $expiry): View
     {
+        $filters = $request->validate([
+            'status' => ['nullable', 'in:awaiting_admin,awaiting_participants,awaiting_schedule,reschedule_requested,scheduled'],
+            'type' => ['nullable', 'in:lost,found'],
+        ]);
         $expiry->expirePastDue();
+        $handovers = Handover::with($this->relations())
+            ->whereNotIn('status', ['completed', 'unsuccessful'])
+            ->when($filters['status'] ?? null, fn ($query, $status) => $query->where('status', $status))
+            ->when($filters['type'] ?? null, fn ($query, $type) => $query->where(function ($typeQuery) use ($type): void {
+                $typeQuery
+                    ->whereHas('claimRequest.post', fn ($postQuery) => $postQuery->where('type', $type))
+                    ->orWhereHas('sighting.post', fn ($postQuery) => $postQuery->where('type', $type));
+            }))
+            ->latest();
+
         return view('admin.handovers', [
-            'handovers' => Handover::with($this->relations())
-                ->whereNotIn('status', ['completed', 'unsuccessful'])
-                ->latest()
-                ->paginate(25),
+            'handovers' => $handovers->paginate(25)->withQueryString(),
+            'status' => $filters['status'] ?? '',
+            'type' => $filters['type'] ?? '',
         ]);
     }
 
@@ -199,13 +212,26 @@ class HandoverController extends Controller
         ]);
     }
 
-    public function history(): View
+    public function history(Request $request): View
     {
+        $filters = $request->validate([
+            'status' => ['nullable', 'in:completed,unsuccessful'],
+            'type' => ['nullable', 'in:lost,found'],
+        ]);
+        $handovers = Handover::with($this->relations())
+            ->whereIn('status', ['completed', 'unsuccessful'])
+            ->when($filters['status'] ?? null, fn ($query, $status) => $query->where('status', $status))
+            ->when($filters['type'] ?? null, fn ($query, $type) => $query->where(function ($typeQuery) use ($type): void {
+                $typeQuery
+                    ->whereHas('claimRequest.post', fn ($postQuery) => $postQuery->where('type', $type))
+                    ->orWhereHas('sighting.post', fn ($postQuery) => $postQuery->where('type', $type));
+            }))
+            ->latest('updated_at');
+
         return view('admin.handover-history', [
-            'handovers' => Handover::with($this->relations())
-                ->whereIn('status', ['completed', 'unsuccessful'])
-                ->latest('updated_at')
-                ->paginate(20),
+            'handovers' => $handovers->paginate(20)->withQueryString(),
+            'status' => $filters['status'] ?? '',
+            'type' => $filters['type'] ?? '',
         ]);
     }
 

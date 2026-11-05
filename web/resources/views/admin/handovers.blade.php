@@ -13,9 +13,34 @@
     </div>
 
     <section class="section card">
+        <form class="filter-form compact-filter" method="get" action="{{ route('admin.handovers.index') }}">
+            <label>Status
+                <select name="status">
+                    <option value="" @selected($status === '')>All active handovers</option>
+                    @foreach ([
+                        'awaiting_admin' => 'Awaiting administrator',
+                        'awaiting_participants' => 'Awaiting participant agreements',
+                        'awaiting_schedule' => 'Awaiting schedule',
+                        'reschedule_requested' => 'Reschedule requested',
+                        'scheduled' => 'Scheduled',
+                    ] as $value => $label)
+                        <option value="{{ $value }}" @selected($status === $value)>{{ $label }}</option>
+                    @endforeach
+                </select>
+            </label>
+            <label>Type
+                <select name="type">
+                    <option value="" @selected($type === '')>All types</option>
+                    <option value="lost" @selected($type === 'lost')>Lost</option>
+                    <option value="found" @selected($type === 'found')>Found</option>
+                </select>
+            </label>
+            <button class="button" type="submit">Filter</button>
+            <a class="button secondary" href="{{ route('admin.handovers.index') }}">Clear</a>
+        </form>
         <div class="table-wrap">
             <table>
-                <thead><tr><th>Item and participants</th><th>Status</th><th>Agreements</th><th>Schedule</th><th>Place</th><th>Admin action</th></tr></thead>
+                <thead><tr><th>Item and participants</th><th>Type</th><th>Status</th><th>Agreements</th><th>Schedule</th><th>Place</th><th>Admin action</th></tr></thead>
                 <tbody>
                 @forelse ($handovers as $handover)
                     @php
@@ -34,6 +59,7 @@
                             <span class="muted">Owner: {{ $owner?->first_name }} {{ $owner?->last_name }}</span><br>
                             <span class="muted">Holder: {{ $finder?->first_name }} {{ $finder?->last_name }}</span>
                         </td>
+                        <td>{{ ucfirst($post?->type ?? 'unknown') }}</td>
                         <td>
                             @if (in_array($handover->status, ['awaiting_admin', 'awaiting_participants'], true))
                                 Awaiting participant agreements
@@ -84,7 +110,7 @@
                         </td>
                     </tr>
                 @empty
-                    <tr><td colspan="6" class="empty-cell">No active handovers need administrator attention.</td></tr>
+                    <tr><td colspan="7" class="empty-cell">No active handovers need administrator attention.</td></tr>
                 @endforelse
                 </tbody>
             </table>

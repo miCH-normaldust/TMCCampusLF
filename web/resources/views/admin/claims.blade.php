@@ -16,33 +16,42 @@
             <a class="button secondary" href="{{ route('admin.claims.index') }}">Clear</a>
         </form>
         <div class="table-wrap section"><table>
-            <thead><tr><th>Found item</th><th>Item owner</th><th>Claimant</th><th>Attempt</th><th>Status</th><th>Submitted</th><th></th></tr></thead>
+            <thead><tr><th>Found item</th><th>Item owner</th><th>Claims for this post</th></tr></thead>
             <tbody>
-            @forelse ($claims as $claim)
-                <tr>
-                    <td>{{ $claim->post->item_name }}<br><a class="button secondary" href="{{ route('admin.community-feed.index', ['view' => 'posts', 'post_id' => $claim->post_id]) }}">View original post</a></td>
-                    <td>{{ $claim->post->author?->first_name }} {{ $claim->post->author?->last_name }}</td>
-                    <td>{{ $claim->claimant->first_name }} {{ $claim->claimant->last_name }}<br><span class="muted">{{ $claim->claimant->tmc_id_no }}</span></td>
-                    <td>{{ $claim->attempt_no }}</td>
+            @forelse ($claimPosts as $post)
+                <tr class="claim-post-row" data-claim-group="{{ $post->id }}">
+                    <td>{{ $post->item_name }}<br><a class="button secondary" href="{{ route('admin.community-feed.index', ['view' => 'posts', 'post_id' => $post->id]) }}">View original post</a></td>
+                    <td>{{ $post->author?->first_name }} {{ $post->author?->last_name }}</td>
                     <td>
-                        <span class="pill">
-                            @if ($claim->status === 'pending' && $claim->author_decision === 'pending')
-                                Awaiting owner
-                            @elseif ($claim->status === 'pending' && $claim->author_decision === 'approved')
-                                Ready for admin
-                            @else
-                                {{ ucfirst($claim->status) }}
-                            @endif
-                        </span>
+                        <div class="review-submission-list">
+                            @foreach ($post->claimRequests as $claim)
+                                <div class="review-submission" data-claim-id="{{ $claim->id }}">
+                                    <div class="review-submission-details">
+                                        <strong>{{ $claim->claimant->first_name }} {{ $claim->claimant->last_name }}</strong>
+                                        <span class="muted">{{ $claim->claimant->tmc_id_no }}</span>
+                                        <span>Attempt {{ $claim->attempt_no }}</span>
+                                        <span class="pill">
+                                            @if ($claim->status === 'pending' && $claim->author_decision === 'pending')
+                                                Awaiting owner
+                                            @elseif ($claim->status === 'pending' && $claim->author_decision === 'approved')
+                                                Approved by owner · Awaiting admin
+                                            @else
+                                                {{ ucfirst($claim->status) }}
+                                            @endif
+                                        </span>
+                                        <span class="muted">{{ $claim->created_at->format('M j, Y g:i A') }}</span>
+                                    </div>
+                                    <a class="button secondary" href="{{ route('admin.claims.show', $claim) }}">{{ $claim->status === 'pending' && $claim->author_decision === 'approved' ? 'Review claim' : 'View claim' }}</a>
+                                </div>
+                            @endforeach
+                        </div>
                     </td>
-                    <td>{{ $claim->created_at->format('M j, Y g:i A') }}</td>
-                    <td><a class="button secondary" href="{{ route('admin.claims.show', $claim) }}">{{ $claim->status === 'pending' && $claim->author_decision === 'approved' ? 'Review claim' : 'View claim' }}</a></td>
                 </tr>
             @empty
-                <tr><td colspan="7" class="empty-cell">No claims match this status.</td></tr>
+                <tr><td colspan="3" class="empty-cell">No claims match this status.</td></tr>
             @endforelse
             </tbody>
         </table></div>
-        <div class="pagination">{{ $claims->links() }}</div>
+        <div class="pagination">{{ $claimPosts->links() }}</div>
     </section>
 @endsection

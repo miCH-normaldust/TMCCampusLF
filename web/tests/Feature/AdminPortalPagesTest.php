@@ -194,6 +194,96 @@ class AdminPortalPagesTest extends TestCase
             ->assertDontSee('<img src="'.$proofUrl.'"', false);
     }
 
+    public function test_admin_claims_and_lost_item_proofs_are_grouped_by_origin_post(): void
+    {
+        $this->app->make(Vite::class)->useHotFile(storage_path('framework/testing/missing-vite-hot-file'));
+        $admin = User::create([
+            'first_name' => 'Grouped',
+            'last_name' => 'Admin',
+            'tmc_id_no' => 'ADMIN-GROUPED-POSTS',
+            'email' => 'admin-grouped-posts@tmc.test',
+            'password' => 'LongTestPassword!123',
+            'role' => 'admin',
+            'status' => 'active',
+            'email_verified_at' => now(),
+        ]);
+        $owner = User::create([
+            'first_name' => 'Grouped',
+            'last_name' => 'Owner',
+            'tmc_id_no' => 'USER-GROUPED-OWNER',
+            'email' => 'grouped-owner@tmc.test',
+            'password' => 'LongTestPassword!123',
+            'role' => 'user',
+            'status' => 'active',
+            'email_verified_at' => now(),
+        ]);
+        $member = User::create([
+            'first_name' => 'Grouped',
+            'last_name' => 'Member',
+            'tmc_id_no' => 'USER-GROUPED-MEMBER',
+            'email' => 'grouped-member@tmc.test',
+            'password' => 'LongTestPassword!123',
+            'role' => 'user',
+            'status' => 'active',
+            'email_verified_at' => now(),
+        ]);
+        $category = Category::create(['name' => 'Grouped Category', 'is_active' => true]);
+        $location = Location::create(['name' => 'Grouped Location', 'is_active' => true]);
+        $foundPost = $this->createFeedPost($owner, $category, $location, 'found', 'active', 'Grouped Notebook');
+        $lostPost = $this->createFeedPost($owner, $category, $location, 'lost', 'active', 'Grouped Umbrella');
+
+        ClaimRequest::create([
+            'post_id' => $foundPost->id,
+            'claimant_id' => $member->id,
+            'answers' => ['blue cover'],
+            'attempt_no' => 1,
+            'status' => 'pending',
+            'author_decision' => 'pending',
+        ]);
+        ClaimRequest::create([
+            'post_id' => $foundPost->id,
+            'claimant_id' => $member->id,
+            'answers' => ['blue cover'],
+            'attempt_no' => 2,
+            'status' => 'pending',
+            'author_decision' => 'pending',
+        ]);
+        foreach ([
+            ['pending', 'pending'],
+            ['approved', 'pending'],
+            ['approved', 'approved'],
+        ] as [$authorDecision, $adminDecision]) {
+            LostSighting::create([
+                'post_id' => $lostPost->id,
+                'user_id' => $member->id,
+                'answer' => 'yes',
+                'evidence_text' => 'Seen near the library.',
+                'author_decision' => $authorDecision,
+                'admin_decision' => $adminDecision,
+            ]);
+        }
+
+        $this->actingAs($admin, 'admin');
+
+        $claimsResponse = $this->get(route('admin.claims.index'))->assertOk();
+        $this->assertSame(1, substr_count($claimsResponse->getContent(), 'data-claim-group="'.$foundPost->id.'"'));
+        $this->assertSame(2, substr_count($claimsResponse->getContent(), 'data-claim-id='));
+
+        $proofsResponse = $this->get(route('admin.sightings.index'))->assertOk();
+        $this->assertSame(1, substr_count($proofsResponse->getContent(), 'data-proof-group="'.$lostPost->id.'"'));
+        $this->assertSame(3, substr_count($proofsResponse->getContent(), 'data-sighting-id='));
+        $this->assertStringContainsString('Awaiting owner review', $proofsResponse->getContent());
+        $this->assertStringContainsString('Awaiting administrator review', $proofsResponse->getContent());
+        $this->assertStringContainsString('Approved by administrator', $proofsResponse->getContent());
+
+        $pendingProofsResponse = $this->get(route('admin.sightings.index', ['status' => 'pending']))->assertOk();
+        $this->assertSame(2, substr_count($pendingProofsResponse->getContent(), 'data-sighting-id='));
+        $approvedProofsResponse = $this->get(route('admin.sightings.index', ['status' => 'approved']))->assertOk();
+        $this->assertSame(1, substr_count($approvedProofsResponse->getContent(), 'data-sighting-id='));
+        $rejectedProofsResponse = $this->get(route('admin.sightings.index', ['status' => 'rejected']))->assertOk();
+        $this->assertSame(0, substr_count($rejectedProofsResponse->getContent(), 'data-sighting-id='));
+    }
+
     public function test_admin_home_counts_posts_and_claims_for_their_destination_pages(): void
     {
         $admin = User::create([

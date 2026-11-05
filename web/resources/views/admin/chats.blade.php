@@ -9,7 +9,7 @@
         <div>
             <p class="eyebrow">MEMBER SUPPORT</p>
             <h1>Chats</h1>
-            <p class="muted">Reply to members who contacted TMC about lost-item evidence.</p>
+            <p class="muted">Reply to members who contacted TMC about claims or lost-item evidence.</p>
         </div>
     </div>
 
@@ -32,7 +32,7 @@
                                 <strong>{{ $conversation->supportUser->first_name }} {{ $conversation->supportUser->last_name }}</strong>
                                 <small>{{ $conversation->updated_at?->diffForHumans(short: true) }}</small>
                             </span>
-                            <span class="conversation-subject">{{ $conversation->supportSighting?->post?->item_name ?? 'Evidence review' }}</span>
+                            <span class="conversation-subject">{{ $conversation->supportClaim?->post?->item_name ?? $conversation->supportSighting?->post?->item_name ?? 'TMC review' }}</span>
                             <span class="conversation-preview">{{ $latest?->body ? \Illuminate\Support\Str::limit($latest->body, 48) : 'No messages yet' }}</span>
                         </span>
                     </a>
@@ -47,7 +47,7 @@
                 <header class="messenger-thread-head">
                     <div>
                         <h2>{{ $selected->supportUser->first_name }} {{ $selected->supportUser->last_name }}</h2>
-                        <p class="muted">{{ $selected->supportSighting?->post?->item_name ?? 'Evidence review' }}</p>
+                        <p class="muted">{{ $selected->supportClaim?->post?->item_name ?? $selected->supportSighting?->post?->item_name ?? 'TMC review' }}</p>
                     </div>
                     @if ($selected->supportUser->email)
                         <a class="button secondary" href="mailto:{{ $selected->supportUser->email }}">Email member</a>
@@ -62,6 +62,18 @@
                             <img src="{{ \App\Support\PublicMediaUrl::forPath($selected->supportSighting->evidence_image) }}"
                                  alt="Submitted lost-item evidence">
                         @endif
+                    </div>
+                @endif
+
+                @if ($selected->supportClaim)
+                    <div class="messenger-evidence">
+                        <strong>Claim by {{ $selected->supportClaim->claimant->first_name }} {{ $selected->supportClaim->claimant->last_name }}</strong>
+                        @foreach ($selected->supportClaim->answers as $index => $answer)
+                            <p>Response {{ $index + 1 }}: {{ $answer }}</p>
+                        @endforeach
+                        @foreach ($selected->supportClaim->evidenceImages as $index => $image)
+                            <p><a href="{{ \App\Support\PublicMediaUrl::forPath($image->path) }}" target="_blank" rel="noopener">View claimant photo {{ $index + 1 }}</a></p>
+                        @endforeach
                     </div>
                 @endif
 

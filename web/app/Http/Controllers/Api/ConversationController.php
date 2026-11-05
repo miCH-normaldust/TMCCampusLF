@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Models\ClaimRequest;
 use App\Models\Conversation;
 use App\Models\Handover;
 use App\Models\LostSighting;
@@ -28,6 +29,8 @@ class ConversationController extends Controller
             'sighting.post.author:id,first_name,last_name,profile_picture_path',
             'sighting.user:id,first_name,last_name,profile_picture_path',
             'supportUser:id,first_name,last_name',
+            'supportClaim:id,post_id,claimant_id',
+            'supportClaim.post:id,item_name,user_id',
             'supportSighting:id,post_id',
             'supportSighting.post:id,item_name',
             'userOne:id,first_name,last_name,profile_picture_path',
@@ -217,7 +220,9 @@ class ConversationController extends Controller
         } elseif ($conversation->support_user_id !== null) {
             $recipients = User::where('role', 'admin')->where('status', 'active')->get();
             $title = 'New admin support message';
-            $topic = $conversation->supportSighting?->post?->item_name ?? 'CampusLF';
+            $topic = $conversation->supportClaim?->post?->item_name
+                ?? $conversation->supportSighting?->post?->item_name
+                ?? 'CampusLF';
         } else {
             $claim = $conversation->claimRequest;
             if ($claim) {
@@ -311,6 +316,64 @@ class ConversationController extends Controller
                 'id' => $message->id,
                 'body' => $message->body,
                 'sender_id' => $message->sender_id,
+                'sender_first_name' => $request->user()->first_name,
+                'sender_last_name' => $request->user()->last_name,
+                'sender_role' => $request->user()->role,
+                'created_at' => $message->created_at,
+            ],
+        ], 201);
+    }
+
+    public function startAdminClaimChat(
+        Request $request,
+        ClaimRequest $claim,
+        TextMasker $masker,
+    ): JsonResponse {
+        $claim->loadMissing('post');
+        abort_unless(
+            $claim->post->user_id === $request->user()->id
+                && $claim->status === 'pending'
+                && $claim->author_decision === 'approved',
+            404,
+        );
+        $data = $request->validate([
+            'body' => ['required', 'string', 'max:2000'],
+        ]);
+        $conversation = Conversation::firstOrCreate([
+            'support_user_id' => $request->user()->id,
+            'support_claim_id' => $claim->id,
+        ]);
+        $message = $conversation->messages()->create([
+            'sender_id' => $request->user()->id,
+            'body' => $masker->mask($data['body']),
+        ]);
+        $conversation->touch();
+
+        foreach (User::where('role', 'admin')->where('status', 'active')->get() as $admin) {
+            $admin->notifications()->create([
+                'id' => (string) Str::uuid(),
+                'type' => 'admin_chat_message',
+                'data' => [
+                    'title' => 'Claim review message',
+                    'body' => 'A post owner sent a message about '.$claim->post->item_name.'.',
+                    'conversation_id' => $conversation->id,
+                    'claim_id' => $claim->id,
+                    'post_id' => $claim->post_id,
+                ],
+            ]);
+        }
+
+        return response()->json([
+            'id' => $conversation->id,
+            'type' => 'admin',
+            'item_name' => 'Admin support · '.$claim->post->item_name,
+            'other_first_name' => 'TMC',
+            'other_last_name' => 'administrators',
+            'other_user_id' => null,
+            'message' => [
+                'id' => $message->id,
+                'body' => $message->body,
+                'sender_id' => $request->user()->id,
                 'sender_first_name' => $request->user()->first_name,
                 'sender_last_name' => $request->user()->last_name,
                 'sender_role' => $request->user()->role,
@@ -658,8 +721,9 @@ class ConversationController extends Controller
             $conversationType = 'direct';
         } elseif ($conversation->support_user_id !== null) {
             $otherUser = null;
-            $itemName = $conversation->supportSighting?->post?->item_name
-                ? 'Admin support · '.$conversation->supportSighting->post->item_name
+            $supportPost = $conversation->supportClaim?->post ?? $conversation->supportSighting?->post;
+            $itemName = $supportPost?->item_name
+                ? 'Admin support · '.$supportPost->item_name
                 : 'TMC admin support';
             $conversationType = 'admin';
         } else {
@@ -680,7 +744,9 @@ class ConversationController extends Controller
             'requested_by' => $conversation->requested_by,
             'is_request' => $conversation->status === 'pending' && $conversation->requested_by !== $user->id,
             'is_pending_sender' => $conversation->status === 'pending' && $conversation->requested_by === $user->id,
-            'post_id' => $post?->id ?? $conversation->supportSighting?->post_id,
+            'post_id' => $post?->id
+                ?? $conversation->supportClaim?->post_id
+                ?? $conversation->supportSighting?->post_id,
             'item_name' => $itemName,
             'other_user_id' => $otherUser?->id,
             'other_first_name' => $otherUser?->first_name ?? 'TMC',

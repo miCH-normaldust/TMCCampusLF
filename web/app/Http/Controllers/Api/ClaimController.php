@@ -245,8 +245,7 @@ class ClaimController extends Controller
             'claimant:id,first_name,last_name',
             'evidenceImages',
         ])
-            ->whereIn('status', ['pending', 'approved'])
-            ->where('author_decision', 'pending')
+            ->whereIn('status', ['pending', 'rejected'])
             ->whereHas('post', fn ($post) => $post->where('user_id', $request->user()->id))
             ->latest()
             ->paginate(20)
@@ -258,6 +257,28 @@ class ClaimController extends Controller
                 'claimant_first_name' => $claim->claimant->first_name,
                 'claimant_last_name' => $claim->claimant->last_name,
                 'attempt_no' => $claim->attempt_no,
+                'status' => $claim->status,
+                'author_decision' => $claim->author_decision,
+                'review_reason' => $claim->review_reason,
+                'can_undo_owner_decision' => $claim->owner_decision_batch_id !== null
+                    && (int) $claim->owner_decision_batch_winner_id === $claim->id
+                    && ! ClaimRequest::where('post_id', $claim->post_id)
+                        ->where('owner_decision_batch_id', $claim->owner_decision_batch_id)
+                        ->where(function ($reviewed): void {
+                            $reviewed->whereNotNull('reviewed_at')
+                                ->orWhere('status', 'approved');
+                        })
+                        ->exists()
+                    && ! ClaimRequest::where('post_id', $claim->post_id)
+                        ->where('owner_decision_batch_id', $claim->owner_decision_batch_id)
+                        ->whereExists(function ($query): void {
+                            $query->selectRaw('1')
+                                ->from('claim_requests as newer')
+                                ->whereColumn('newer.post_id', 'claim_requests.post_id')
+                                ->whereColumn('newer.claimant_id', 'claim_requests.claimant_id')
+                                ->whereColumn('newer.id', '>', 'claim_requests.id');
+                        })
+                        ->exists(),
                 'answers' => $claim->answers,
                 'verification_questions' => $claim->post->verificationQuestions
                     ->map(fn ($question): array => [
@@ -297,10 +318,53 @@ class ClaimController extends Controller
             $decision = $data['decision'];
 
             if ($decision === 'approve') {
+                abort_if(
+                    $post->claimRequests()
+                        ->where('id', '!=', $claim->id)
+                        ->where(fn ($query) => $query
+                            ->where('status', 'approved')
+                            ->orWhere(fn ($pending) => $pending
+                                ->where('status', 'pending')
+                                ->where('author_decision', 'approved')))
+                        ->exists(),
+                    409,
+                    'Another claim for this item is already approved or awaiting administrator review.',
+                );
+                $batchId = (string) Str::uuid();
                 $claim->update([
                     'author_decision' => 'approved',
                     'author_decision_reason' => $data['reason'],
+                    'owner_decision_batch_id' => $batchId,
+                    'owner_decision_batch_winner_id' => $claim->id,
                 ]);
+                $otherClaims = ClaimRequest::with('claimant')
+                    ->where('post_id', $claim->post_id)
+                    ->where('id', '!=', $claim->id)
+                    ->where('status', 'pending')
+                    ->where('author_decision', 'pending')
+                    ->lockForUpdate()
+                    ->get();
+                foreach ($otherClaims as $otherClaim) {
+                    $reason = 'Another claim was approved for this item.';
+                    $otherClaim->update([
+                        'status' => 'rejected',
+                        'author_decision' => 'rejected',
+                        'author_decision_reason' => $reason,
+                        'owner_decision_batch_id' => $batchId,
+                        'owner_decision_batch_winner_id' => $claim->id,
+                    ]);
+                    $otherClaim->claimant->notifications()->create([
+                        'id' => (string) Str::uuid(),
+                        'type' => 'claim_owner_rejected',
+                        'data' => [
+                            'title' => 'Your claim was not approved',
+                            'body' => $reason,
+                            'claim_id' => $otherClaim->id,
+                            'post_id' => $otherClaim->post_id,
+                            'reason' => $reason,
+                        ],
+                    ]);
+                }
                 $conversationId = null;
                 if ($claim->status === 'approved') {
                     $conversation = Conversation::firstOrCreate(['claim_id' => $claim->id]);
@@ -333,6 +397,8 @@ class ClaimController extends Controller
                 'status' => 'rejected',
                 'author_decision' => 'rejected',
                 'author_decision_reason' => $data['reason'],
+                'owner_decision_batch_id' => (string) Str::uuid(),
+                'owner_decision_batch_winner_id' => $claim->id,
             ]);
             if (! $post->claimRequests()->where('status', 'pending')->exists()) {
                 $post->update(['status' => 'active']);
@@ -355,6 +421,79 @@ class ClaimController extends Controller
                 ? 'You agreed to the claim. It is now waiting for TMC administrator review.'
                 : 'You declined the claim and your reason was sent to the claimant.',
             'decision' => $decision,
+        ]);
+    }
+
+    public function undoPostAuthorDecision(Request $request, ClaimRequest $claim): JsonResponse
+    {
+        DB::transaction(function () use ($request, $claim): void {
+            $post = Post::whereKey($claim->post_id)->lockForUpdate()->firstOrFail();
+            $claim = ClaimRequest::whereKey($claim->id)->lockForUpdate()->firstOrFail();
+            abort_unless($post->user_id === $request->user()->id, 404);
+            abort_unless(
+                $claim->owner_decision_batch_id !== null
+                    && (int) $claim->owner_decision_batch_winner_id === $claim->id,
+                409,
+                'This claim decision can no longer be undone.',
+            );
+
+            $batchClaims = ClaimRequest::where('post_id', $post->id)
+                ->where('owner_decision_batch_id', $claim->owner_decision_batch_id)
+                ->where('owner_decision_batch_winner_id', $claim->id)
+                ->lockForUpdate()
+                ->get();
+            abort_unless($batchClaims->isNotEmpty(), 409, 'This claim decision can no longer be undone.');
+            abort_if(
+                $batchClaims->contains(fn (ClaimRequest $entry): bool => $entry->reviewed_at !== null
+                    || $entry->status === 'approved'),
+                409,
+                'An administrator has already reviewed this claim.',
+            );
+            abort_if(
+                $batchClaims->contains(fn (ClaimRequest $entry): bool => ClaimRequest::where('post_id', $post->id)
+                    ->where('claimant_id', $entry->claimant_id)
+                    ->where('id', '>', $entry->id)
+                    ->exists()),
+                409,
+                'A newer claim has been submitted, so this decision can no longer be undone.',
+            );
+            abort_if(
+                $claim->author_decision === 'rejected'
+                    && $post->claimRequests()
+                        ->where('id', '!=', $claim->id)
+                        ->where('status', 'pending')
+                        ->where('author_decision', 'approved')
+                        ->exists(),
+                409,
+                'Undo the other approved claim after administrator review before reopening this claim.',
+            );
+
+            foreach ($batchClaims as $entry) {
+                $entry->update([
+                    'status' => 'pending',
+                    'author_decision' => 'pending',
+                    'author_decision_reason' => null,
+                    'review_reason' => null,
+                    'owner_decision_batch_id' => null,
+                    'owner_decision_batch_winner_id' => null,
+                ]);
+                $entry->claimant->notifications()->create([
+                    'id' => (string) Str::uuid(),
+                    'type' => 'claim_owner_decision_undone',
+                    'data' => [
+                        'title' => 'Claim decision withdrawn',
+                        'body' => 'The item owner withdrew the decision. Your claim is awaiting review again.',
+                        'claim_id' => $entry->id,
+                        'post_id' => $post->id,
+                    ],
+                ]);
+            }
+
+            $post->update(['status' => 'claim_pending']);
+        });
+
+        return response()->json([
+            'message' => 'The claim decision was undone. Affected claims are awaiting review again.',
         ]);
     }
 }

@@ -2281,7 +2281,48 @@ body.image-modal-open {
     width: 100%;
 }
 
+.review-submission-list {
+    display: grid;
+    gap: 10px;
+    white-space: normal;
+}
+
+.review-submission {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 10px;
+    border: 1px solid var(--campus-border);
+    border-radius: 10px;
+    white-space: normal;
+}
+
+.review-submission-details {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px 12px;
+    white-space: normal;
+}
+
+.claim-post-row > td:last-child {
+    min-width: 420px;
+    white-space: normal;
+}
+
 .proof-text {
     margin: 10px 0;
     line-height: 1.55;
+}
+
+@media (max-width: 640px) {
+    .review-submission {
+        align-items: flex-start;
+        flex-direction: column;
+    }
+
+    .claim-post-row > td:last-child {
+        min-width: 320px;
+    }
 }

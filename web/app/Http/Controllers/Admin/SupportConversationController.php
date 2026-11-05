@@ -16,6 +16,9 @@ class SupportConversationController extends Controller
     {
         $conversations = Conversation::with([
             'supportUser:id,first_name,last_name,email',
+            'supportClaim.post:id,item_name',
+            'supportClaim.claimant:id,first_name,last_name',
+            'supportClaim.evidenceImages',
             'supportSighting.post:id,item_name',
             'latestMessage.sender:id,first_name,last_name,role',
         ])
@@ -29,6 +32,9 @@ class SupportConversationController extends Controller
         if ($selected) {
             $selected->load([
                 'supportUser:id,first_name,last_name,email',
+                'supportClaim.post:id,item_name',
+                'supportClaim.claimant:id,first_name,last_name',
+                'supportClaim.evidenceImages',
                 'supportSighting.post:id,item_name',
                 'supportSighting.user:id,first_name,last_name',
             ]);
@@ -66,6 +72,7 @@ class SupportConversationController extends Controller
                 'title' => 'Message from TMC administrators',
                 'body' => 'A TMC administrator replied to your message.',
                 'conversation_id' => $conversation->id,
+                'claim_id' => $conversation->support_claim_id,
                 'sighting_id' => $conversation->support_sighting_id,
             ],
         ]);
