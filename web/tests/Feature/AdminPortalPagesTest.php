@@ -7,6 +7,7 @@ use App\Models\Category;
 use App\Models\ClaimRequest;
 use App\Models\LostSighting;
 use App\Models\Location;
+use App\Models\MeetupLocation;
 use App\Models\Post;
 use App\Models\Report;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -15,6 +16,7 @@ use Illuminate\Http\Request;
 use Illuminate\Session\TokenMismatchException;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Contracts\Debug\ExceptionHandler;
+use Illuminate\Http\UploadedFile;
 use Tests\TestCase;
 
 class AdminPortalPagesTest extends TestCase
@@ -184,6 +186,8 @@ class AdminPortalPagesTest extends TestCase
             ->get(route('admin.sightings.index'))
             ->assertOk()
             ->assertSee('View image')
+            ->assertSee('post_id='.$post->id, false)
+            ->assertSee('View original post')
             ->assertSee('data-proof-src="'.$proofUrl.'"', false)
             ->assertSee('proof-image-modal', false)
             ->assertSee('image-modal-body', false)
@@ -358,6 +362,60 @@ class AdminPortalPagesTest extends TestCase
         $this->assertStringNotContainsString('Found Item Claims', $shortcutMarkup);
     }
 
+    public function test_admin_can_manage_handover_places_from_settings(): void
+    {
+        $admin = User::create([
+            'first_name' => 'Places',
+            'last_name' => 'Admin',
+            'tmc_id_no' => 'ADMIN-HANDOVER-PLACES',
+            'email' => 'admin-handover-places@tmc.test',
+            'password' => 'LongTestPassword!123',
+            'role' => 'admin',
+            'status' => 'active',
+            'email_verified_at' => now(),
+        ]);
+        $this->actingAs($admin, 'admin');
+
+        $this->get(route('admin.settings.index'))
+            ->assertOk()
+            ->assertSee('Handover places');
+
+        $this->post(route('admin.settings.handover-locations.store'), [
+            'name' => 'North Campus Desk',
+            'description' => 'Near the north entrance.',
+            'operating_hours' => 'Weekdays, 9:00 AM - 4:00 PM',
+        ])->assertRedirect();
+
+        $place = MeetupLocation::where('name', 'North Campus Desk')->firstOrFail();
+        $this->assertTrue($place->is_active);
+        $this->assertSame('Near the north entrance.', $place->description);
+        $this->assertSame('Weekdays, 9:00 AM - 4:00 PM', $place->operating_hours);
+
+        $this->get(route('admin.settings.index'))
+            ->assertOk()
+            ->assertSee('North Campus Desk')
+            ->assertSee('Active');
+
+        $this->patch(route('admin.settings.handover-locations.status', $place))
+            ->assertRedirect();
+        $this->assertFalse($place->fresh()->is_active);
+
+        $this->post(route('admin.settings.handover-locations.store'), [
+            'name' => 'North Campus Desk',
+        ])->assertSessionHasErrors('name');
+
+        $this->get(route('admin.settings.index'))
+            ->assertOk()
+            ->assertSee('North Campus Desk')
+            ->assertSee('Inactive');
+
+        $this->assertDatabaseHas('audit_logs', [
+            'admin_id' => $admin->id,
+            'action' => 'handover_location_created',
+            'reason' => 'North Campus Desk',
+        ]);
+    }
+
     public function test_admin_community_feed_applies_post_filters(): void
     {
         $admin = User::create([
@@ -508,5 +566,143 @@ class AdminPortalPagesTest extends TestCase
             ->assertSessionHasErrors('first_name');
 
         $this->assertDatabaseMissing('users', ['tmc_id_no' => 'TMC-MASTERLIST-MEMBER']);
+    }
+
+    public function test_masterlist_import_accepts_excel_other_header_and_updates_existing_records(): void
+    {
+        $admin = User::create([
+            'first_name' => 'Portal',
+            'last_name' => 'Admin',
+            'tmc_id_no' => 'ADMIN-MASTERLIST-CSV',
+            'email' => 'admin-masterlist-csv@tmc.test',
+            'password' => 'LongTestPassword!123',
+            'role' => 'admin',
+            'status' => 'active',
+            'email_verified_at' => now(),
+        ]);
+        DB::table('tmc_masterlist')->insert([
+            'tmc_id_no' => 'TMC-CSV-UPDATE',
+            'full_name' => 'Old Member Name',
+            'email' => 'old-member@gmail.com',
+            'user_type' => 'student',
+            'user_type_other' => null,
+            'department' => 'CCS',
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+
+        $csv = "\xEF\xBB\xBFtmc_id_no,full_name,email,user_type,other,department\r\n"
+            ."TMC-CSV-UPDATE,Updated Member Name,updated-member@gmail.com,other,Visiting Faculty,CAS\r\n"
+            ."TMC-CSV-NEW,New Member Name,new-member@gmail.com,student,,BSED\r\n\r\n";
+
+        $this->actingAs($admin, 'admin')
+            ->post(route('admin.masterlist.import'), [
+                'masterlist' => UploadedFile::fake()->createWithContent('masterlist.csv', $csv),
+            ])
+            ->assertOk()
+            ->assertSee('2 valid row(s) will be added or updated.')
+            ->assertSee('Other: Visiting Faculty');
+
+        $this->assertDatabaseHas('tmc_masterlist', [
+            'tmc_id_no' => 'TMC-CSV-UPDATE',
+            'full_name' => 'Old Member Name',
+            'email' => 'old-member@gmail.com',
+        ]);
+
+        $this->post(route('admin.masterlist.confirm'))
+            ->assertRedirect(route('admin.users.index'));
+
+        $this->assertDatabaseHas('tmc_masterlist', [
+            'tmc_id_no' => 'TMC-CSV-UPDATE',
+            'full_name' => 'Updated Member Name',
+            'email' => 'updated-member@gmail.com',
+            'user_type' => 'other',
+            'user_type_other' => 'Visiting Faculty',
+            'department' => 'CAS',
+        ]);
+        $this->assertDatabaseHas('tmc_masterlist', [
+            'tmc_id_no' => 'TMC-CSV-NEW',
+            'full_name' => 'New Member Name',
+            'email' => 'new-member@gmail.com',
+            'department' => 'BSED',
+        ]);
+    }
+
+    public function test_masterlist_import_rejects_email_assigned_to_a_different_tmc_id(): void
+    {
+        $admin = $this->createMasterlistAdmin();
+        DB::table('tmc_masterlist')->insert([
+            'tmc_id_no' => 'TMC-CSV-EXISTING',
+            'full_name' => 'Existing Member',
+            'email' => 'member@gmail.com',
+            'user_type' => 'student',
+            'department' => 'CCS',
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+        $csv = "tmc_id_no,full_name,email,user_type,other,department\r\n"
+            ."TMC-CSV-NEW,New Member,member@gmail.com,student,,CCS\r\n";
+
+        $this->actingAs($admin, 'admin')
+            ->from(route('admin.users.index'))
+            ->post(route('admin.masterlist.import'), [
+                'masterlist' => UploadedFile::fake()->createWithContent('masterlist.csv', $csv),
+            ])
+            ->assertRedirect(route('admin.users.index'))
+            ->assertSessionHasErrors('masterlist');
+
+        $this->assertDatabaseMissing('tmc_masterlist', ['tmc_id_no' => 'TMC-CSV-NEW']);
+    }
+
+    public function test_masterlist_confirmation_handles_email_conflict_created_after_preview(): void
+    {
+        $admin = $this->createMasterlistAdmin();
+        $csv = "tmc_id_no,full_name,email,user_type,other,department\r\n"
+            ."TMC-CSV-NEW,New Member,new-member@gmail.com,student,,CCS\r\n";
+
+        $this->actingAs($admin, 'admin')
+            ->post(route('admin.masterlist.import'), [
+                'masterlist' => UploadedFile::fake()->createWithContent('masterlist.csv', $csv),
+            ])
+            ->assertOk();
+
+        DB::table('tmc_masterlist')->insert([
+            'tmc_id_no' => 'TMC-CSV-OTHER',
+            'full_name' => 'Other Member',
+            'email' => 'new-member@gmail.com',
+            'user_type' => 'student',
+            'department' => 'CAS',
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+
+        $this->post(route('admin.masterlist.confirm'))
+            ->assertRedirect(route('admin.users.index'))
+            ->assertSessionHasErrors('masterlist')
+            ->assertSessionHas('masterlist_import_preview');
+
+        $this->assertDatabaseMissing('tmc_masterlist', ['tmc_id_no' => 'TMC-CSV-NEW']);
+    }
+
+    public function test_direct_get_to_masterlist_confirmation_redirects_with_guidance(): void
+    {
+        $this->actingAs($this->createMasterlistAdmin(), 'admin')
+            ->get('/admin/masterlist/confirm')
+            ->assertRedirect(route('admin.users.index'))
+            ->assertSessionHasErrors('masterlist');
+    }
+
+    private function createMasterlistAdmin(): User
+    {
+        return User::create([
+            'first_name' => 'Portal',
+            'last_name' => 'Admin',
+            'tmc_id_no' => 'ADMIN-MASTERLIST-CSV',
+            'email' => 'admin-masterlist-csv@tmc.test',
+            'password' => 'LongTestPassword!123',
+            'role' => 'admin',
+            'status' => 'active',
+            'email_verified_at' => now(),
+        ]);
     }
 }

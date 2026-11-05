@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Admin;
 use App\Http\Controllers\Controller;
 use App\Models\ClaimRequest;
 use App\Models\Conversation;
+use App\Models\Post;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -34,9 +35,14 @@ class ClaimReviewController extends Controller
             'reason' => ['required_if:decision,reject', 'nullable', 'string', 'max:1000'],
         ]);
 
-        abort_unless($claim->status === 'pending', 409, 'This claim has already been reviewed.');
-
         DB::transaction(function () use ($request, $claim, $data): void {
+            $post = Post::whereKey($claim->post_id)->lockForUpdate()->firstOrFail();
+            $claim = ClaimRequest::with(['claimant', 'post.author'])
+                ->whereKey($claim->id)
+                ->lockForUpdate()
+                ->firstOrFail();
+            abort_unless($claim->status === 'pending', 409, 'This claim has already been reviewed.');
+
             if ($data['decision'] === 'approve') {
                 $claim->update([
                     'status' => 'approved',
@@ -44,7 +50,7 @@ class ClaimReviewController extends Controller
                     'reviewed_by' => $request->user('admin')->id,
                     'reviewed_at' => now(),
                 ]);
-                $claim->post->update(['status' => 'handover_pending']);
+                $post->update(['status' => 'handover_pending']);
                 $otherClaims = ClaimRequest::with('claimant')
                     ->where('post_id', $claim->post_id)
                     ->where('id', '!=', $claim->id)
@@ -53,6 +59,7 @@ class ClaimReviewController extends Controller
                 foreach ($otherClaims as $otherClaim) {
                     $otherClaim->update([
                         'status' => 'rejected',
+                        'author_decision' => 'rejected',
                         'reviewed_by' => $request->user('admin')->id,
                         'reviewed_at' => now(),
                     ]);
@@ -63,7 +70,7 @@ class ClaimReviewController extends Controller
                     ]);
                 }
                 $conversation = Conversation::firstOrCreate(['claim_id' => $claim->id]);
-                $claim->post->author->notifications()->create([
+                $post->author->notifications()->create([
                     'id' => (string) Str::uuid(),
                     'type' => 'claim_approved',
                     'data' => [
@@ -83,12 +90,12 @@ class ClaimReviewController extends Controller
                         'claim_id' => $claim->id,
                     ],
                 ]);
-                $claim->post->author->notifications()->create([
+                $post->author->notifications()->create([
                     'id' => (string) Str::uuid(),
                     'type' => 'claim_owner_review',
                     'data' => [
                         'title' => 'A claim is ready for your decision',
-                        'body' => 'An administrator approved a claim for '.$claim->post->item_name.'. Confirm whether you agree to hand over the item.',
+                        'body' => 'An administrator approved a claim for '.$post->item_name.'. Confirm whether you agree to hand over the item.',
                         'claim_id' => $claim->id,
                         'post_id' => $claim->post_id,
                         'conversation_id' => $conversation->id,
@@ -101,9 +108,16 @@ class ClaimReviewController extends Controller
                     'reviewed_by' => $request->user('admin')->id,
                     'reviewed_at' => now(),
                 ]);
-                if (! $claim->post->claimRequests()->where('status', 'pending')->exists()) {
-                    $claim->post->update(['status' => 'active']);
-                }
+                $hasApprovedClaim = $post->claimRequests()
+                    ->where('status', 'approved')
+                    ->whereIn('author_decision', ['pending', 'approved'])
+                    ->exists();
+                $hasPendingClaims = $post->claimRequests()->where('status', 'pending')->exists();
+                $post->update([
+                    'status' => $hasApprovedClaim
+                        ? 'handover_pending'
+                        : ($hasPendingClaims ? 'claim_pending' : 'active'),
+                ]);
                 $claim->claimant->notifications()->create([
                     'id' => (string) Str::uuid(),
                     'type' => 'claim_rejected',

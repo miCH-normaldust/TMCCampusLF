@@ -58,7 +58,7 @@
         "-ExecutionPolicy",
         "Bypass",
         "-Command",
-        "& \"$env:LOCALAPPDATA\\Android\\Sdk\\platform-tools\\adb.exe\" reverse tcp:8000 tcp:8000"
+        "& \"$env:LOCALAPPDATA\\Android\\Sdk\\platform-tools\\adb.exe\" reverse tcp:18000 tcp:8000"
       ],
       "dependsOn": [
         "CampusLF: Start Laravel API"

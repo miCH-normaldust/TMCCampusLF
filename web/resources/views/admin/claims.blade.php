@@ -20,7 +20,7 @@
             <tbody>
             @forelse ($claims as $claim)
                 <tr>
-                    <td>{{ $claim->post->item_name }}</td>
+                    <td>{{ $claim->post->item_name }}<br><a class="button secondary" href="{{ route('admin.community-feed.index', ['view' => 'posts', 'post_id' => $claim->post_id]) }}">View original post</a></td>
                     <td>{{ $claim->post->author?->first_name }} {{ $claim->post->author?->last_name }}</td>
                     <td>{{ $claim->claimant->first_name }} {{ $claim->claimant->last_name }}<br><span class="muted">{{ $claim->claimant->tmc_id_no }}</span></td>
                     <td>{{ $claim->attempt_no }}</td>

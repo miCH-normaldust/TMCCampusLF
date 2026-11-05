@@ -192,19 +192,8 @@ class InteractionController extends Controller
                 abort_unless(
                     $latestSighting->created_at->gt(now()->subHour()),
                     409,
-                    'Your evidence is under review and can only be edited during the first hour.',
+                    'Your evidence is under review. Another attempt can only be submitted during the first hour.',
                 );
-
-                $imagePath = isset($data['evidence_image'])
-                    ? $images->store($data['evidence_image'])
-                    : $latestSighting->evidence_image;
-
-                $latestSighting->update([
-                    'evidence_text' => isset($data['evidence_text']) ? $masker->mask($data['evidence_text']) : null,
-                    'evidence_image' => $imagePath,
-                ]);
-
-                return [$latestSighting->fresh(), true];
             }
 
             if ($latestSighting && ($latestSighting->author_decision === 'approved' || $latestSighting->admin_decision === 'approved')) {
@@ -264,8 +253,15 @@ class InteractionController extends Controller
         return response()->json([
             'message' => $data['answer'] === 'yes' ? 'Evidence sent to the post author for review.' : 'Your answer was recorded.',
             'sighting_id' => $sighting->id,
+            'attempts_used' => $data['answer'] === 'yes'
+                ? $post->sightings()->where('user_id', $request->user()->id)->where('answer', 'yes')->count()
+                : null,
+            'attempt_limit' => (int) DB::table('settings')->where('key', 'proof_attempts')->value('value') ?: 3,
             'updated' => $updated,
-            'editable' => $data['answer'] === 'yes',
+            'editable' => false,
+            'can_submit_another' => $data['answer'] === 'yes'
+                && $post->sightings()->where('user_id', $request->user()->id)->where('answer', 'yes')->count()
+                    < ((int) DB::table('settings')->where('key', 'proof_attempts')->value('value') ?: 3),
         ], $updated ? 200 : 201);
     }
 
@@ -286,6 +282,12 @@ class InteractionController extends Controller
         $isRejected = $sighting->author_decision === 'rejected' || $sighting->admin_decision === 'rejected';
         $attemptLimit = (int) DB::table('settings')->where('key', 'proof_attempts')->value('value') ?: 3;
         $canReapply = $isRejected && $userSightings->count() < $attemptLimit;
+        $canSubmitAnother = $userSightings->count() < $attemptLimit
+            && ($canReapply || (
+                $sighting->author_decision === 'pending'
+                && $sighting->admin_decision === 'pending'
+                && $sighting->created_at->gt(now()->subHour())
+            ));
 
         return response()->json(['data' => [
             'id' => $sighting->id,
@@ -297,13 +299,12 @@ class InteractionController extends Controller
             'admin_decision' => $sighting->admin_decision,
             'admin_reason' => $sighting->admin_reason,
             'editable_until' => $sighting->created_at->copy()->addHour(),
-            'editable' => $sighting->author_decision === 'pending'
-                && $sighting->admin_decision === 'pending'
-                && $sighting->created_at->gt(now()->subHour()),
+            'editable' => false,
             'is_rejected' => $isRejected,
             'attempts_used' => $userSightings->count(),
             'attempt_limit' => $attemptLimit,
             'can_reapply' => $canReapply,
+            'can_submit_another' => $canSubmitAnother,
         ]]);
     }
 

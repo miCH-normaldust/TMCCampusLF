@@ -8,6 +8,7 @@ use App\Models\Handover;
 use App\Models\LostSighting;
 use App\Models\User;
 use App\Services\TextMasker;
+use App\Services\HandoverExpiry;
 use App\Support\PublicMediaUrl;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -318,15 +319,16 @@ class ConversationController extends Controller
         ], 201);
     }
 
-    public function handovers(Request $request): JsonResponse
+    public function handovers(Request $request, HandoverExpiry $expiry): JsonResponse
     {
+        $expiry->expirePastDue();
         $user = $request->user();
         $handovers = Handover::with([
-            'claimRequest.post.author:id,first_name',
-            'claimRequest.claimant:id,first_name',
+            'claimRequest.post.author:id,first_name,last_name',
+            'claimRequest.claimant:id,first_name,last_name',
             'claimRequest.conversation:id,claim_id',
-            'sighting.post.author:id,first_name',
-            'sighting.user:id,first_name',
+            'sighting.post.author:id,first_name,last_name',
+            'sighting.user:id,first_name,last_name',
             'sighting.conversation:id,sighting_id',
             'location:id,name,description,operating_hours',
         ])
@@ -357,18 +359,21 @@ class ConversationController extends Controller
                 $owner = $claim?->claimant ?? $post?->author;
                 $finder = $claim?->post?->author ?? $sighting?->user;
                 $isOwner = $owner?->id === $user->id;
+                $otherParticipant = $isOwner ? $finder : $owner;
 
                 return [
                     'id' => $handover->id,
+                    'transaction_reference' => 'HL-'.str_pad((string) $handover->id, 8, '0', STR_PAD_LEFT),
                     'type' => $post?->type ?? 'unknown',
                     'item_name' => $post?->item_name ?? 'TMC item',
-                    'other_first_name' => ($isOwner ? $finder : $owner)?->first_name ?? 'TMC member',
+                    'owner_name' => trim(($owner?->first_name ?? '').' '.($owner?->last_name ?? '')),
+                    'other_participant_name' => trim(($otherParticipant?->first_name ?? '').' '.($otherParticipant?->last_name ?? '')),
+                    'other_first_name' => $otherParticipant?->first_name ?? 'TMC member',
                     'sighting_id' => $sighting?->id,
                     'conversation_id' => $claim?->conversation?->id
                         ?? $sighting?->conversation?->id,
                     'owner_confirmed_at' => $handover->owner_confirmed_at,
                     'finder_confirmed_at' => $handover->finder_confirmed_at,
-                    'admin_approved_at' => $handover->admin_approved_at,
                     'my_confirmation_at' => $isOwner
                         ? $handover->owner_confirmed_at
                         : $handover->finder_confirmed_at,
@@ -381,6 +386,8 @@ class ConversationController extends Controller
                     'location_description' => $handover->location?->description,
                     'receipt_code' => $handover->code_encrypted !== null
                         && $handover->status === 'scheduled'
+                        && $handover->owner_confirmed_at !== null
+                        && $handover->finder_confirmed_at !== null
                             ? Crypt::decryptString($handover->code_encrypted)
                             : null,
                     'reschedule_attempts' => $handover->reschedule_attempts,
@@ -406,13 +413,16 @@ class ConversationController extends Controller
             404,
         );
         abort_unless(in_array($sighting->post->status, ['handover_pending', 'retrieved'], true), 409, 'This lost-item evidence is not approved for a handover.');
-        $handover = Handover::firstOrCreate(['sighting_id' => $sighting->id]);
+        $handover = Handover::firstOrCreate(
+            ['sighting_id' => $sighting->id],
+            ['status' => 'awaiting_participants', 'admin_approved_at' => now()],
+        );
 
         return response()->json([
             'id' => $handover->id,
             'owner_confirmed_at' => $handover->owner_confirmed_at,
             'finder_confirmed_at' => $handover->finder_confirmed_at,
-            'message' => 'Handover created. TMC administrators must approve it before both participants can agree.',
+            'message' => 'Handover created. Both participants must approve it before administrators can schedule it.',
         ], $handover->wasRecentlyCreated ? 201 : 200);
     }
 
@@ -426,13 +436,16 @@ class ConversationController extends Controller
             409,
             'The administrator and item poster must both approve this claim before handover.',
         );
-        $handover = Handover::firstOrCreate(['claim_id' => $claim->id]);
+        $handover = Handover::firstOrCreate(
+            ['claim_id' => $claim->id],
+            ['status' => 'awaiting_participants', 'admin_approved_at' => now()],
+        );
 
         return response()->json([
             'id' => $handover->id,
             'owner_confirmed_at' => $handover->owner_confirmed_at,
             'finder_confirmed_at' => $handover->finder_confirmed_at,
-            'message' => 'Handover created. TMC administrators must approve it before both participants can agree.',
+            'message' => 'Handover created. Both participants must approve it before administrators can schedule it.',
         ], $handover->wasRecentlyCreated ? 201 : 200);
     }
 
@@ -456,13 +469,17 @@ class ConversationController extends Controller
             );
         }
         abort_unless(
-            $handover->admin_approved_at !== null
-                && in_array($handover->status, ['awaiting_participants', 'awaiting_schedule'], true),
+            $this->canReceiveParticipantAgreement($handover),
             409,
-            'TMC administrators must approve the handover before participants can agree.',
+            'Both participants can approve the handover before it is scheduled.',
         );
         DB::transaction(function () use ($request, $handover, $claim, $sighting, $conversation): void {
             $locked = Handover::whereKey($handover->id)->lockForUpdate()->firstOrFail();
+            abort_unless(
+                $this->canReceiveParticipantAgreement($locked),
+                409,
+                'Both participants can approve the handover before it is scheduled.',
+            );
             $ownerId = $claim?->claimant_id ?? $sighting?->post?->user_id;
             if ($request->user()->id === $ownerId) {
                 if ($locked->owner_confirmed_at === null) {
@@ -476,6 +493,8 @@ class ConversationController extends Controller
             $locked = $locked->fresh();
             if ($locked->owner_confirmed_at && $locked->finder_confirmed_at) {
                 $locked->update(['status' => 'awaiting_schedule']);
+            } else {
+                $locked->update(['status' => 'awaiting_participants']);
             }
         });
 
@@ -488,11 +507,27 @@ class ConversationController extends Controller
         ]);
     }
 
+    private function canReceiveParticipantAgreement(Handover $handover): bool
+    {
+        return ! in_array(
+            $handover->status,
+            ['scheduled', 'completed', 'unsuccessful', 'reschedule_requested'],
+            true,
+        )
+            && $handover->scheduled_at === null
+            && $handover->completed_at === null
+            && $handover->unsuccessful_at === null
+            && ! ($handover->owner_confirmed_at && $handover->finder_confirmed_at);
+    }
+
     public function requestHandoverReschedule(
         Request $request,
         Handover $handover,
         TextMasker $masker,
+        HandoverExpiry $expiry,
     ): JsonResponse {
+        $expiry->expirePastDue();
+        $handover->refresh();
         $claim = $handover->claimRequest;
         $sighting = $handover->sighting;
         $ownerId = $claim?->claimant_id ?? $sighting?->post?->user_id;

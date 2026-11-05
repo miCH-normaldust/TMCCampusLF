@@ -21,6 +21,7 @@
                     </div>
                     <p class="muted">Owner: {{ $sighting->post->author->first_name }} · Evidence from {{ $sighting->user->first_name }}</p>
                     <p>{{ $sighting->evidence_text }}</p>
+                    <a class="button secondary" href="{{ route('admin.community-feed.index', ['view' => 'posts', 'post_id' => $sighting->post_id]) }}">View original post</a>
                     @if ($sighting->evidence_image)
                         @include('admin.partials.proof-image', [
                             'sighting' => $sighting,
@@ -43,6 +44,7 @@
                 <p>{{ $sighting->post->description }}</p>
                 <p class="muted">Owner: {{ $sighting->post->author->first_name }} · Evidence from {{ $sighting->user->first_name }}</p>
                 <p class="proof-text">{{ $sighting->evidence_text }}</p>
+                <p><a class="button secondary" href="{{ route('admin.community-feed.index', ['view' => 'posts', 'post_id' => $sighting->post_id]) }}">View original post</a></p>
                 @if ($sighting->evidence_image)
                     @include('admin.partials.proof-image', [
                         'sighting' => $sighting,

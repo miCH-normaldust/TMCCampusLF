@@ -29,7 +29,7 @@ Route::prefix('admin')->name('admin.')->middleware(['auth:admin', 'role:admin', 
     Route::get('/claims/{claim}', [ClaimReviewController::class, 'show'])->name('claims.show');
     Route::post('/claims/{claim}', [ClaimReviewController::class, 'decide'])->name('claims.decide');
     Route::get('/handovers', [HandoverController::class, 'index'])->name('handovers.index');
-    Route::post('/handovers/{handover}/approve', [HandoverController::class, 'approve'])->name('handovers.approve');
+    Route::get('/handovers/{handover}/manage', [HandoverController::class, 'manage'])->name('handovers.manage');
     Route::post('/handovers/{handover}/schedule', [HandoverController::class, 'schedule'])->name('handovers.schedule');
     Route::post('/handovers/{handover}/reschedule', [HandoverController::class, 'decideReschedule'])->name('handovers.reschedule');
     Route::post('/handovers/{handover}/complete', [HandoverController::class, 'complete'])->name('handovers.complete');
@@ -48,6 +48,9 @@ Route::prefix('admin')->name('admin.')->middleware(['auth:admin', 'role:admin', 
     Route::post('/users', [UserController::class, 'store'])->name('users.store');
     Route::patch('/users/{user}/status', [UserController::class, 'setStatus'])->name('users.status');
     Route::post('/masterlist/import', [UserController::class, 'import'])->name('masterlist.import');
+    Route::get('/masterlist/confirm', fn () => redirect()->route('admin.users.index')->withErrors([
+        'masterlist' => 'Masterlist confirmation must be submitted from the preview page. Upload and preview the CSV, then use its Confirm import button.',
+    ]));
     Route::post('/masterlist/confirm', [UserController::class, 'confirmImport'])->name('masterlist.confirm');
     Route::get('/sightings', [SightingReviewController::class, 'index'])->name('sightings.index');
     Route::post('/sightings/{sighting}', [SightingReviewController::class, 'decide'])->name('sightings.decide');
@@ -55,6 +58,8 @@ Route::prefix('admin')->name('admin.')->middleware(['auth:admin', 'role:admin', 
     Route::put('/settings', [SettingsController::class, 'update'])->name('settings.update');
     Route::post('/catalog', [SettingsController::class, 'createCatalog'])->name('catalog.store');
     Route::patch('/catalog/{kind}/{id}', [SettingsController::class, 'setCatalogStatus'])->name('catalog.status');
+    Route::post('/settings/handover-locations', [SettingsController::class, 'createHandoverLocation'])->name('settings.handover-locations.store');
+    Route::patch('/settings/handover-locations/{location}/status', [SettingsController::class, 'setHandoverLocationStatus'])->name('settings.handover-locations.status');
     Route::get('/activity', [ActivityController::class, 'index'])->name('activity.index');
     Route::get('/activity/export', [ActivityController::class, 'export'])->name('activity.export');
     Route::get('/audit', [ActivityController::class, 'audit'])->name('audit.index');

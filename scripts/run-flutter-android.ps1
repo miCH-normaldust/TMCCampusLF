@@ -73,7 +73,7 @@ try {
     throw 'The Laravel API is not responding at http://127.0.0.1:8000. Start it with scripts/start-backend.ps1 before running Flutter.'
 }
 
-& $adb -s $device reverse tcp:8000 tcp:8000
+& $adb -s $device reverse tcp:18000 tcp:8000
 if ($LASTEXITCODE -ne 0) {
     throw "Could not forward the Laravel API port to Android device $device."
 }
@@ -84,5 +84,5 @@ if ($LASTEXITCODE -ne 0) {
     throw 'Flutter package resolution failed.'
 }
 
-flutter run --debug -d $device --dart-define=CAMPUSLF_API_URL=http://127.0.0.1:8000/api/v1
+flutter run --debug -d $device --dart-define=CAMPUSLF_API_URL=http://127.0.0.1:18000/api/v1
 exit $LASTEXITCODE

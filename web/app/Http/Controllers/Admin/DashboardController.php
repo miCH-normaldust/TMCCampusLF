@@ -68,6 +68,7 @@ class DashboardController extends Controller
             'status' => ['nullable', 'in:active,claim_pending,handover_pending,retrieved,hidden,archived'],
             'category_id' => ['nullable', 'integer', 'exists:categories,id'],
             'search' => ['nullable', 'string', 'max:150'],
+            'post_id' => ['nullable', 'integer', 'exists:posts,id'],
             'sort' => ['nullable', 'in:latest,oldest'],
         ]);
         $view = $filters['view'] ?? 'posts';
@@ -94,6 +95,7 @@ class DashboardController extends Controller
         }
 
         $posts = Post::with(['author:id,first_name,last_name', 'category:id,name', 'location:id,name', 'images'])
+            ->when($filters['post_id'] ?? null, fn ($query, $postId) => $query->whereKey($postId))
             ->when($filters['type'] ?? null, fn ($query, $type) => $query->where('type', $type))
             ->when($filters['status'] ?? null, fn ($query, $status) => $query->where('status', $status))
             ->when($filters['category_id'] ?? null, fn ($query, $categoryId) => $query->where('category_id', $categoryId))

@@ -146,8 +146,10 @@ Legend: [Mobile] = Flutter app; [Web] = Laravel Blade admin portal; (Threat #n) 
 - The chat closes automatically once the post is retrieved or after a set period (e.g., 7 days). Messages can be reported (see 5.6) and new messages trigger a push notification. (Threat #4, #6)
 
 ### 7.3.  Handover Confirmation
-- **[Mobile]** When both parties agree on a Meet-up Location, the app shows a handover code and QR valid for a limited time. Both the owner and the finder confirm the handover in the app, which records the time and moves the post to Retrieved. (Threat #9)
-- **[Web]** At the handover desk, an admin can look up or enter the code to verify the exchange, and a handover record (who, when, where) is stored for disputes. (Threat #9)
+- **[Mobile]** After the ownership claim or lost-item evidence has been approved, both participants can approve the handover in the app. Each participant sees whether the owner and the other participant have approved.
+- **[Web]** After both participants approve, an administrator sets a date and active meet-up location. Scheduling generates a unique 16-digit verification code and a receipt with the transaction reference, item, participants, date, and place.
+- **[Mobile/Web]** Both participants and administrators can view and print the scheduled receipt. Either participant may request a reschedule with a reason; the receipt is unavailable while that request is under review. At the handover desk, an administrator verifies the receipt code to confirm the exchange, and the handover record is stored for disputes. (Threat #9)
+- **[Web]** At the handover desk, an admin verifies the printed receipt code to confirm the exchange, and the handover record (who, when, where) is stored for disputes. (Threat #9)
 
 ### 7.4.  No Rewards Policy
 - **[Mobile]** The system has no payment or reward feature, and posts have no reward field. Chat and handover screens display a notice that TMC CampusLF does not handle money or rewards, and any such arrangement is outside the platform's responsibility. (Threat #10)
@@ -348,7 +350,7 @@ Legend: [Mobile] = Flutter app; [Web] = Laravel Blade admin portal; (Threat #n) 
 | Seen It (Yes) Evidence | Short form: description of where and when it was seen, photo upload (camera/gallery), **Send to owner** button. |
 | Create Post (4 steps) | Segmented toggle **I lost something \| I found something**. Step 1 Details: item name, category, color, location dropdown, date picker, description. Step 2 Photos: add up to 5 photos, each with an image description field. Step 3 (found only): verification questions with answers, and custody choice (With me / Surrendered to TMC office). Step 4 Review: list of **similar existing posts** and the button **This is a different item, post it**. Back and Next buttons on every step; draft is kept if the user leaves. |
 | Inbox | Two tabs: **Notifications** (approvals, rejections, moderation notices, matches, expiry reminders) and **Chats** (approved conversations only). Unread items have a red dot; swipe to mark as read. |
-| Chat & Handover | Message bubbles with first names only; banner "Do not share phone numbers. Meet only at a TMC meet-up location." Top buttons: **Choose meet-up location** (list from admins with hours), **Handover** . The handover screen shows a large QR and code with a countdown, and the button **Confirm handover**. Footer notice: no rewards or payments through the app. |
+| Chat & Handover | Message bubbles with first names only; banner "Do not share phone numbers. Meet only at a TMC meet-up location." After the claim or evidence is approved, both participants approve the handover. An administrator then schedules the date and place and generates the transaction receipt with its unique verification code. Both participants can view, print, or share the receipt and request a reschedule with a reason. Footer notice: no rewards or payments through the app. |
 | My Posts | Tabs Active / Claim Pending / Retrieved / Archived; each card has Edit, Delete, **Mark as Retrieved**, and Keep Active (for expiring posts). |
 | Profile & Settings | Avatar with initials, name, department, edit profile, change password, notification settings, Terms & Disclaimer, Privacy Notice, **Log out**. |
 

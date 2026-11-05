@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Admin;
 use App\Http\Controllers\Controller;
 use App\Models\Category;
 use App\Models\Location;
+use App\Models\MeetupLocation;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -19,6 +20,7 @@ class SettingsController extends Controller
             'settings' => DB::table('settings')->pluck('value', 'key'),
             'categories' => Category::orderBy('name')->get(),
             'locations' => Location::orderBy('name')->get(),
+            'handoverLocations' => MeetupLocation::orderBy('name')->get(),
         ]);
     }
 
@@ -70,6 +72,31 @@ class SettingsController extends Controller
         $this->audit($request, $action, $record->name);
 
         return back()->with('status', 'Campus option status updated.');
+    }
+
+    public function createHandoverLocation(Request $request): RedirectResponse
+    {
+        $data = $request->validate([
+            'name' => ['required', 'string', 'max:120', 'unique:meetup_locations,name'],
+            'description' => ['nullable', 'string', 'max:2000'],
+            'operating_hours' => ['nullable', 'string', 'max:200'],
+        ]);
+        MeetupLocation::create($data + ['is_active' => true]);
+        $this->audit($request, 'handover_location_created', $data['name']);
+
+        return back()->with('status', 'Handover place added.');
+    }
+
+    public function setHandoverLocationStatus(Request $request, MeetupLocation $location): RedirectResponse
+    {
+        $location->update(['is_active' => ! $location->is_active]);
+        $this->audit(
+            $request,
+            $location->is_active ? 'handover_location_activated' : 'handover_location_deactivated',
+            $location->name,
+        );
+
+        return back()->with('status', 'Handover place status updated.');
     }
 
     private function saveSettings(Request $request, array $settings): void

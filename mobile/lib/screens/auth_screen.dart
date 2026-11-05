@@ -44,13 +44,15 @@ class _AuthScreenState extends State<AuthScreen> {
   }
 
   Future<void> _login() async {
-    if (!_formKey.currentState!.validate() || _busy) return;
+    if (_busy) return;
+    final isValid = _formKey.currentState!.validate();
     setState(() {
-      _busy = true;
-      _showVerifyAction = false;
       _error = null;
       _message = null;
+      _showVerifyAction = false;
     });
+    if (!isValid) return;
+    setState(() => _busy = true);
     try {
       final name = await widget.auth.login(_email.text, _password.text);
       if (mounted) widget.onSignedIn(name);
@@ -86,6 +88,7 @@ class _AuthScreenState extends State<AuthScreen> {
     setState(() {
       _email.text = result.email;
       _message = result.message;
+      _error = null;
     });
   }
 
@@ -557,14 +560,14 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
     super.dispose();
   }
 
-  Future<void> _loadCaptcha() async {
+  Future<void> _loadCaptcha({bool clearError = true}) async {
     if (_captchaLoading) return;
     setState(() {
       _captchaLoading = true;
       _captchaToken = '';
       _captchaQuestion = 'Loading security check…';
       _captchaAnswer.clear();
-      _error = null;
+      if (clearError) _error = null;
     });
     try {
       final challenge = await widget.auth.captcha();
@@ -658,7 +661,7 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
     } finally {
       if (mounted) setState(() => _busy = false);
     }
-    if (refreshCaptcha) await _loadCaptcha();
+    if (refreshCaptcha) await _loadCaptcha(clearError: false);
   }
 
   String? _required(String? value) =>

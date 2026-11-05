@@ -5,6 +5,7 @@
 @section('content')
     <a class="button secondary" href="{{ route('admin.dashboard') }}">Back to dashboard</a>
     <h1 class="section">Review claim: {{ $claim->post->item_name }}</h1>
+    <p><a class="button secondary" href="{{ route('admin.community-feed.index', ['view' => 'posts', 'post_id' => $claim->post_id]) }}">View original post</a></p>
     <section class="cards">
         <article class="card">
             <h2>Finder's verification questions</h2>

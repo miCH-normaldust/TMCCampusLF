@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Models\Handover;
 use App\Models\MeetupLocation;
 use App\Models\User;
+use App\Services\HandoverExpiry;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -13,39 +14,42 @@ use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Crypt;
 use Illuminate\Support\Str;
 use Illuminate\View\View;
+use Illuminate\Support\Carbon;
 
 class HandoverController extends Controller
 {
-    public function index(): View
+    public function index(HandoverExpiry $expiry): View
     {
+        $expiry->expirePastDue();
         return view('admin.handovers', [
             'handovers' => Handover::with($this->relations())
                 ->whereNotIn('status', ['completed', 'unsuccessful'])
                 ->latest()
                 ->paginate(25),
+        ]);
+    }
+
+    public function manage(Handover $handover, HandoverExpiry $expiry): View
+    {
+        $expiry->expirePastDue();
+        $handover->refresh();
+        abort_unless(
+            in_array($handover->status, ['awaiting_admin', 'awaiting_participants', 'awaiting_schedule', 'reschedule_requested'], true),
+            404,
+        );
+        $handover->load($this->relations());
+        $participantsApproved = $handover->owner_confirmed_at !== null
+            && $handover->finder_confirmed_at !== null
+            && in_array($handover->status, ['awaiting_schedule', 'reschedule_requested'], true);
+
+        return view('admin.handover-manage', [
+            'handover' => $handover,
             'locations' => MeetupLocation::where('is_active', true)->orderBy('name')->get(),
+            'participantsApproved' => $participantsApproved,
             'rescheduleLimit' => (int) DB::table('settings')
                 ->where('key', 'handover_reschedule_attempts')
                 ->value('value') ?: 2,
         ]);
-    }
-
-    public function approve(Request $request, Handover $handover): RedirectResponse
-    {
-        abort_unless($handover->status === 'awaiting_admin', 409, 'This handover is no longer awaiting administrator approval.');
-
-        DB::transaction(function () use ($request, $handover): void {
-            $locked = Handover::whereKey($handover->id)->lockForUpdate()->firstOrFail();
-            abort_unless($locked->status === 'awaiting_admin', 409, 'This handover has already been reviewed.');
-            $locked->update([
-                'status' => 'awaiting_participants',
-                'admin_approved_at' => now(),
-            ]);
-            $this->notifyParticipants($locked, 'handover_admin_approved', 'Handover approved by TMC', 'Both participants must agree before TMC schedules the handover.');
-            $this->audit($request, 'handover_admin_approved', $locked, null);
-        });
-
-        return back()->with('status', 'Handover approved. Waiting for both users to agree.');
     }
 
     public function schedule(Request $request, Handover $handover): RedirectResponse
@@ -85,7 +89,7 @@ class HandoverController extends Controller
                 'code_hash' => Hash::make($code),
                 'code_encrypted' => Crypt::encryptString($code),
                 'code_lookup' => hash_hmac('sha256', $code, config('app.key')),
-                'expires_at' => now()->parse($data['scheduled_at'])->endOfDay(),
+                'expires_at' => Carbon::parse($data['scheduled_at']),
                 'reschedule_requested_at' => null,
                 'requested_date' => null,
                 'reschedule_reason' => null,
@@ -100,7 +104,8 @@ class HandoverController extends Controller
             $this->audit($request, 'handover_scheduled', $locked, 'Scheduled at '.$location->name.' for '.$locked->scheduled_at->toIso8601String());
         });
 
-        return back()->with('status', 'Handover scheduled and a receipt was issued to both participants.');
+        return redirect()->route('admin.handovers.index')
+            ->with('status', 'Handover scheduled and a receipt was issued to both participants.');
     }
 
     public function decideReschedule(Request $request, Handover $handover): RedirectResponse
@@ -128,11 +133,14 @@ class HandoverController extends Controller
             $this->audit($request, 'handover_reschedule_rejected', $locked, $data['reason'] ?? null);
         });
 
-        return back()->with('status', 'Reschedule request declined. The existing handover date remains scheduled.');
+        return redirect()->route('admin.handovers.index')
+            ->with('status', 'Reschedule request declined. The existing handover date remains scheduled.');
     }
 
-    public function complete(Request $request, Handover $handover): RedirectResponse
+    public function complete(Request $request, Handover $handover, HandoverExpiry $expiry): RedirectResponse
     {
+        $expiry->expirePastDue();
+        $handover->refresh();
         $data = $request->validate(['code' => ['required', 'digits:16']]);
         abort_unless($handover->status === 'scheduled', 409, 'Only scheduled handovers can be completed.');
         abort_unless(
@@ -164,9 +172,17 @@ class HandoverController extends Controller
         return back()->with('status', 'Item retrieval confirmed and the origin post is marked retrieved.');
     }
 
-    public function receipt(Handover $handover): View
+    public function receipt(Handover $handover, HandoverExpiry $expiry): View
     {
-        abort_unless($handover->status === 'scheduled' && $handover->code_encrypted, 404);
+        $expiry->expirePastDue();
+        $handover->refresh();
+        abort_unless(
+            $handover->status === 'scheduled'
+                && $handover->owner_confirmed_at !== null
+                && $handover->finder_confirmed_at !== null
+                && $handover->code_encrypted,
+            404,
+        );
         $handover->load($this->relations());
 
         return view('admin.handover-receipt', [

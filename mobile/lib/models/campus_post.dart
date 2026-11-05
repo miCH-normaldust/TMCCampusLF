@@ -1,3 +1,5 @@
+import '../core/config.dart';
+
 class CampusPost {
   const CampusPost({
     required this.id,
@@ -17,6 +19,7 @@ class CampusPost {
     required this.authorProfilePictureUrl,
     required this.questions,
     required this.isMine,
+    required this.isHandoverParticipant,
     required this.images,
     required this.createdAt,
     required this.reactionsCount,
@@ -41,6 +44,7 @@ class CampusPost {
   final String? authorProfilePictureUrl;
   final List<String> questions;
   final bool isMine;
+  final bool isHandoverParticipant;
   final List<Map<String, String>> images;
   final String createdAt;
   final int reactionsCount;
@@ -73,12 +77,14 @@ class CampusPost {
                 .toList()
           : const [],
       isMine: json['is_mine'] as bool? ?? false,
+      isHandoverParticipant:
+          json['is_handover_participant'] as bool? ?? false,
       images: rawImages is List
           ? rawImages
                 .whereType<Map<String, dynamic>>()
                 .map(
                   (image) => {
-                    'url': image['url'] as String? ?? '',
+                    'url': _resolveMediaUrl(image['url'] as String? ?? ''),
                     'alt_text': image['alt_text'] as String? ?? '',
                   },
                 )
@@ -89,6 +95,12 @@ class CampusPost {
       commentsCount: json['comments_count'] as int? ?? 0,
       myReaction: json['my_reaction'] as String?,
     );
+  }
+
+  static String _resolveMediaUrl(String url) {
+    if (url.isEmpty) return url;
+
+    return Uri.parse(AppConfig.apiBaseUrl).resolve(url).toString();
   }
 
   /// Returns a copy of this post with the reaction fields replaced.
@@ -117,6 +129,7 @@ class CampusPost {
       authorProfilePictureUrl: authorProfilePictureUrl,
       questions: questions,
       isMine: isMine,
+      isHandoverParticipant: isHandoverParticipant,
       images: images,
       createdAt: createdAt,
       reactionsCount: reactionsCount,

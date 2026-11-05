@@ -71,4 +71,29 @@
             </div>
         </article>
     </section>
+
+    <section class="section card settings-catalog-card">
+        <div class="settings-section-heading"><span class="settings-section-icon blue" aria-hidden="true">⌖</span><div><h2>Handover places</h2><p class="muted">Manage the safe places administrators can choose when scheduling an item handover.</p></div></div>
+        <form class="settings-add-form" method="post" action="{{ route('admin.settings.handover-locations.store') }}">
+            @csrf
+            <label class="settings-field">Place name<input name="name" maxlength="120" placeholder="e.g. Main Office" required></label>
+            <label class="settings-field">Description<input name="description" maxlength="2000" placeholder="Optional directions or details"></label>
+            <label class="settings-field">Operating hours<input name="operating_hours" maxlength="200" placeholder="e.g. Weekdays, 8:00 AM - 5:00 PM"></label>
+            <button class="button" type="submit">Add handover place</button>
+        </form>
+        <div class="settings-catalog-list">
+            @foreach ($handoverLocations as $handoverLocation)
+                <form class="settings-catalog-row" method="post" action="{{ route('admin.settings.handover-locations.status', $handoverLocation) }}">
+                    @csrf @method('PATCH')
+                    <span class="settings-catalog-name">
+                        {{ $handoverLocation->name }}
+                        @if ($handoverLocation->description)<span class="settings-field-hint">{{ $handoverLocation->description }}</span>@endif
+                        @if ($handoverLocation->operating_hours)<span class="settings-field-hint">{{ $handoverLocation->operating_hours }}</span>@endif
+                    </span>
+                    <span class="pill">{{ $handoverLocation->is_active ? 'Active' : 'Inactive' }}</span>
+                    <button class="button secondary" type="submit">{{ $handoverLocation->is_active ? 'Deactivate' : 'Activate' }}</button>
+                </form>
+            @endforeach
+        </div>
+    </section>
 @endsection

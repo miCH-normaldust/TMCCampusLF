@@ -40,7 +40,7 @@
         </article>
         <article class="card">
             <h2>Import TMC masterlist</h2>
-            <p class="muted">Gmail addresses only. CSV header order: tmc_id_no,full_name,email,user_type,user_type_other,department. Choose one of CCS, CRIM, POLSCI, CAS, BSOA, or BSED. Use user_type=other and specify the type in user_type_other for Others. A preview is shown before saving.</p>
+            <p class="muted">Gmail addresses only. CSV header order: tmc_id_no,full_name,email,user_type,user_type_other,department. Excel exports that name the fifth column other are also accepted. Choose one of CCS, CRIM, POLSCI, CAS, BSOA, or BSED. Use user_type=other and specify the type in user_type_other for Others. Existing TMC IDs are updated after you confirm the preview.</p>
             <form method="post" action="{{ route('admin.masterlist.import') }}" enctype="multipart/form-data">
                 @csrf
                 <label for="masterlist">Masterlist CSV</label><br>

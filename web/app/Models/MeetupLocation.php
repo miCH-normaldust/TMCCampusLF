@@ -9,4 +9,9 @@ class MeetupLocation extends Model
     protected $table = 'meetup_locations';
 
     protected $fillable = ['name', 'description', 'operating_hours', 'is_active'];
+
+    protected function casts(): array
+    {
+        return ['is_active' => 'boolean'];
+    }
 }

@@ -143,12 +143,22 @@ class UserController extends Controller
         if (is_array($headers) && isset($headers[0])) {
             $headers[0] = ltrim($headers[0], "\xEF\xBB\xBF");
         }
-        $headers = is_array($headers) ? array_map('trim', $headers) : [];
+        $headers = is_array($headers)
+            ? array_map(static function (string $header): string {
+                $header = strtolower(trim($header));
+
+                return match ($header) {
+                    'other', 'user type other' => 'user_type_other',
+                    default => $header,
+                };
+            }, $headers)
+            : [];
         $hasOtherTypeColumn = $headers === $expected;
         if (! $hasOtherTypeColumn && $headers !== $legacyHeaders) {
             fclose($handle);
             throw ValidationException::withMessages([
-                'masterlist' => 'Use the header order: '.implode(',', $expected).'.',
+                'masterlist' => 'Use the header order: '.implode(',', $expected)
+                    .'. The user_type_other column may also be named other.',
             ]);
         }
         $activeHeaders = $hasOtherTypeColumn ? $expected : $legacyHeaders;
@@ -159,6 +169,9 @@ class UserController extends Controller
         $line = 1;
         while (($values = fgetcsv($handle)) !== false) {
             $line++;
+            if ($values === [null] || (count($values) === 1 && trim((string) $values[0]) === '')) {
+                continue;
+            }
             if (count($values) !== count($activeHeaders)) {
                 fclose($handle);
                 throw ValidationException::withMessages(['masterlist' => "CSV row {$line} must contain ".count($activeHeaders).' columns.']);
@@ -207,6 +220,11 @@ class UserController extends Controller
         if ($rows === []) {
             throw ValidationException::withMessages(['masterlist' => 'The CSV contains no records.']);
         }
+        if ($this->hasMasterlistEmailConflict($rows)) {
+            throw ValidationException::withMessages([
+                'masterlist' => 'An email in this CSV is already assigned to a different TMC ID in the current masterlist. Correct the conflicting email or TMC ID, then upload the CSV again.',
+            ]);
+        }
 
         $request->session()->put('masterlist_import_preview', $rows);
 
@@ -215,10 +233,14 @@ class UserController extends Controller
 
     public function confirmImport(Request $request): RedirectResponse
     {
-        $rows = $request->session()->pull('masterlist_import_preview');
+        $rows = $request->session()->get('masterlist_import_preview');
         abort_unless(is_array($rows) && $rows !== [], 409, 'Upload and preview a masterlist before confirming.');
 
-        DB::transaction(function () use ($rows, $request): void {
+        $imported = DB::transaction(function () use ($rows, $request): bool {
+            if ($this->hasMasterlistEmailConflict($rows)) {
+                return false;
+            }
+
             foreach (array_chunk($rows, 500) as $batch) {
                 DB::table('tmc_masterlist')->upsert(
                     $batch,
@@ -236,9 +258,41 @@ class UserController extends Controller
                 'created_at' => now(),
                 'updated_at' => now(),
             ]);
+
+            return true;
         });
 
+        if (! $imported) {
+            return redirect()->route('admin.users.index')->withErrors([
+                'masterlist' => 'An email in this CSV is now assigned to a different TMC ID in the current masterlist. Re-upload after correcting the conflicting record.',
+            ]);
+        }
+
+        $request->session()->forget('masterlist_import_preview');
+
         return redirect()->route('admin.users.index')->with('status', count($rows).' masterlist records imported.');
+    }
+
+    private function hasMasterlistEmailConflict(array $rows): bool
+    {
+        $idByEmail = [];
+        foreach ($rows as $row) {
+            $idByEmail[strtolower($row['email'])] = $row['tmc_id_no'];
+        }
+
+        foreach (array_chunk(array_keys($idByEmail), 500) as $emails) {
+            $existingRows = DB::table('tmc_masterlist')
+                ->whereIn(DB::raw('LOWER(email)'), $emails)
+                ->get(['email', 'tmc_id_no']);
+
+            foreach ($existingRows as $existingRow) {
+                if (($idByEmail[strtolower($existingRow->email)] ?? null) !== $existingRow->tmc_id_no) {
+                    return true;
+                }
+            }
+        }
+
+        return false;
     }
 
     private function audit(Request $request, User $target, string $action, ?string $reason): void

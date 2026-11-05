@@ -67,17 +67,17 @@ The project includes `.vscode/settings.json` to add the XAMPP PHP directory to n
 
 ## Run the mobile app
 
-Start the Laravel API first. The Flutter app's default Android-emulator API URL is `http://10.0.2.2:8000/api/v1`. The provided emulator launch script and VS Code debug configuration use `adb reverse` and `http://127.0.0.1:8000/api/v1` instead, which also works with AVDs that do not route to the emulator host alias. Cleartext HTTP is enabled only in the Android debug manifest. From the project root, start the configured emulator and run the debug app:
+Start the Laravel API first. Android debug builds use `http://127.0.0.1:18000/api/v1`, with the Android Gradle build automatically forwarding device port 18000 to host port 8000 for connected, authorized devices. This avoids device-side port conflicts and supports Android Studio's Run button on a USB-connected phone or emulator. Cleartext HTTP is enabled only in the Android debug manifest. From the project root, start the configured emulator and run the debug app:
 
 ```powershell
 .\scripts\run-flutter-android.ps1
 ```
 
-The script uses a single connected Android device when available (including a USB-connected phone), otherwise launches the `Medium_Phone` AVD. It waits for Android to finish booting, checks the local API, bridges port 8000, fetches Flutter dependencies, and runs the app in debug mode. Pass `-DeviceId <device-id>` when more than one device is connected. In VS Code, use **Terminal → Run Task → CampusLF: Run Flutter on Android**. Alternatively, start the emulator in Android Studio and run `flutter run --debug` from `mobile/`.
+The script uses a single connected Android device when available (including a USB-connected phone), otherwise launches the `Medium_Phone` AVD. It waits for Android to finish booting, checks the local API, bridges port 8000, fetches Flutter dependencies, and runs the app in debug mode. Pass `-DeviceId <device-id>` when more than one device is connected. In VS Code, use **Terminal → Run Task → CampusLF: Run Flutter on Android**. In Android Studio, starting the Laravel API and pressing Run also configures the USB bridge automatically.
 
 On the first Android build, Gradle may download the Android SDK Platforms 35/36, NDK `28.2.13676358`, and CMake `3.22.1`. Keep the Android SDK licenses accepted and allow those initial downloads to finish before retrying a build.
 
-For a physical phone on the same Wi-Fi, bind the API to all interfaces (the supplied backend script already does this) and override the API URL with the development computer's LAN address:
+For a physical phone on the same Wi-Fi without USB debugging, bind the API to all interfaces (the supplied backend script already does this) and override the API URL with the development computer's LAN address:
 
 ```powershell
 cd C:\xampp\htdocs\campuslfproject\mobile

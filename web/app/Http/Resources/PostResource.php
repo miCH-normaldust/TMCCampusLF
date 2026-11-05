@@ -15,6 +15,27 @@ class PostResource extends JsonResource
         $authenticatedUserId = $request->user()?->getAuthIdentifier();
         $isMine = $authenticatedUserId !== null
             && (string) $authenticatedUserId === (string) $this->user_id;
+        $isHandoverParticipant = $isMine;
+        if (
+            ! $isHandoverParticipant
+            && $authenticatedUserId !== null
+            && $this->status === 'handover_pending'
+        ) {
+            $isHandoverParticipant = match ($this->type) {
+                'lost' => LostSighting::where('post_id', $this->id)
+                    ->where('user_id', $authenticatedUserId)
+                    ->where('answer', 'yes')
+                    ->where('author_decision', 'approved')
+                    ->where('admin_decision', 'approved')
+                    ->exists(),
+                'found' => ClaimRequest::where('post_id', $this->id)
+                    ->where('claimant_id', $authenticatedUserId)
+                    ->where('status', 'approved')
+                    ->whereIn('author_decision', ['pending', 'approved'])
+                    ->exists(),
+                default => false,
+            };
+        }
         $canViewOwnerImages = $isMine || $request->user('admin') !== null;
         if (! $canViewOwnerImages && $authenticatedUserId !== null) {
             $canViewOwnerImages = $this->type === 'found'
@@ -56,6 +77,7 @@ class PostResource extends JsonResource
                 ? PublicMediaUrl::forPath($this->author->profile_picture_path)
                 : null,
             'is_mine' => $isMine,
+            'is_handover_participant' => $isHandoverParticipant,
             'retrieval_request_status' => $isMine
                 ? $this->whenLoaded('latestRetrievalRequest', fn () => $this->latestRetrievalRequest?->status)
                 : null,

@@ -82,7 +82,10 @@ class SightingReviewController extends Controller
                 'status' => $approved ? 'handover_pending' : 'active',
             ]);
             if ($approved) {
-                Handover::firstOrCreate(['sighting_id' => $sighting->id]);
+                Handover::firstOrCreate(
+                    ['sighting_id' => $sighting->id],
+                    ['status' => 'awaiting_participants', 'admin_approved_at' => now()],
+                );
                 $conversation = Conversation::firstOrCreate(['sighting_id' => $sighting->id]);
             }
             foreach ([$sighting->post->author, $sighting->user] as $recipient) {

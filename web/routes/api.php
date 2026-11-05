@@ -53,6 +53,7 @@ Route::prefix('v1')->group(function (): void {
         Route::post('/posts/{post}/retrieval-request', [PostRetrievalRequestController::class, 'store']);
         Route::get('/posts/{post}/matches', [PostController::class, 'matches']);
         Route::post('/posts/{post}/claims', [ClaimController::class, 'store'])->middleware('throttle:5,1');
+        Route::patch('/posts/{post}/claims/{claim}', [ClaimController::class, 'update']);
         Route::get('/posts/{post}/my-claim', [ClaimController::class, 'myClaim']);
         Route::get('/posts/{post}/my-sighting', [InteractionController::class, 'mySighting']);
         Route::get('/claims/awaiting-post-author', [ClaimController::class, 'awaitingPostAuthor']);
