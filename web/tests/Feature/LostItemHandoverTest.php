@@ -164,7 +164,7 @@ class LostItemHandoverTest extends TestCase
             'claimant_id' => $claimant->id,
             'answers' => ['Has a handwritten label inside.'],
             'attempt_no' => 1,
-            'status' => 'approved',
+            'status' => 'pending',
             'author_decision' => 'pending',
         ]);
         $conversation = Conversation::create(['claim_id' => $claim->id]);
@@ -175,13 +175,25 @@ class LostItemHandoverTest extends TestCase
         $this->getJson('/api/v1/claims/awaiting-post-author')
             ->assertOk()
             ->assertJsonPath('data.0.id', $claim->id)
-            ->assertJsonPath('data.0.claimant_first_name', 'Item');
+            ->assertJsonPath('data.0.claimant_first_name', 'Item')
+            ->assertJsonPath('data.0.answers.0', 'Has a handwritten label inside.');
 
         $this->patchJson("/api/v1/claims/{$claim->id}/post-author-decision", [
             'decision' => 'approve',
+            'reason' => 'The claimant provided sufficient ownership evidence.',
         ])->assertOk()
             ->assertJsonPath('decision', 'approve');
+        $this->assertDatabaseMissing('handovers', ['claim_id' => $claim->id]);
+        $admin = $this->createUser('Portal', 'Admin', 'admin-found-handover', 'admin');
+        $this->actingAs($admin, 'admin')
+            ->post(route('admin.claims.decide', $claim->id), [
+                'decision' => 'approve',
+            ])->assertRedirect();
         $this->assertDatabaseHas('handovers', ['claim_id' => $claim->id]);
+        Sanctum::actingAs($claimant);
+        $this->postJson("/api/v1/posts/{$post->id}/claims", [
+            'answers' => ['a new claim'],
+        ])->assertConflict();
 
         $author->update(['profile_picture_path' => 'profiles/author.png']);
         $conversation->messages()->create([
@@ -210,7 +222,6 @@ class LostItemHandoverTest extends TestCase
             ->assertJsonPath('data.0.type', 'found')
             ->assertJsonPath('data.0.completed', false);
         $handoverId = $handoverList->json('data.0.id');
-        $admin = $this->createUser('Portal', 'Admin', 'admin-found-handover', 'admin');
         $this->agreeScheduleAndComplete($admin, $handoverId, $claimant, $author);
         $this->assertDatabaseHas('posts', ['id' => $post->id, 'status' => 'retrieved']);
     }
@@ -301,7 +312,18 @@ class LostItemHandoverTest extends TestCase
             ->assertSee('Transaction reference: <strong>HL-'.str_pad((string) $handoverId, 8, '0', STR_PAD_LEFT).'</strong>', false);
         $this->get(route('admin.handovers.index'))
             ->assertOk()
-            ->assertSee('Print receipt');
+            ->assertSee('Confirm retrieval')
+            ->assertSee(route('admin.handovers.receipt', [
+                'handover' => $handoverId,
+                'participant' => 'owner',
+            ]))
+            ->assertSee(route('admin.handovers.receipt', [
+                'handover' => $handoverId,
+                'participant' => 'finder',
+            ]))
+            ->assertSee('handover-confirm-modal')
+            ->assertSee('owner_code')
+            ->assertSee('finder_code');
 
         Sanctum::actingAs($owner);
         $handover = $this->getJson('/api/v1/handovers')
@@ -310,32 +332,157 @@ class LostItemHandoverTest extends TestCase
             ->assertJsonPath('data.0.transaction_reference', 'HL-'.str_pad((string) $handoverId, 8, '0', STR_PAD_LEFT))
             ->assertJsonPath('data.0.owner_name', $owner->first_name.' '.$owner->last_name)
             ->assertJsonPath('data.0.other_participant_name', $holder->first_name.' '.$holder->last_name);
-        $code = $handover->json('data.0.receipt_code');
-        $this->assertMatchesRegularExpression('/^[0-9]{16}$/', $code);
+        $ownerCode = $handover->json('data.0.receipt_code');
+        $this->assertMatchesRegularExpression('/^[0-9]{16}$/', $ownerCode);
+        $this->assertSame('Owner', $handover->json('data.0.receipt_code_role'));
         Sanctum::actingAs($holder);
-        $this->getJson('/api/v1/handovers')
+        $holderHandover = $this->getJson('/api/v1/handovers')
             ->assertOk()
-            ->assertJsonPath('data.0.receipt_code', $code)
+            ->assertJsonPath('data.0.receipt_code_role', 'Other participant')
             ->assertJsonPath('data.0.transaction_reference', 'HL-'.str_pad((string) $handoverId, 8, '0', STR_PAD_LEFT));
+        $finderCode = $holderHandover->json('data.0.receipt_code');
+        $this->assertMatchesRegularExpression('/^[0-9]{16}$/', $finderCode);
+        $this->assertNotSame($ownerCode, $finderCode);
+
+        $ownerNotification = $owner->notifications()->where('type', 'handover_scheduled')->latest()->firstOrFail();
+        $finderNotification = $holder->notifications()->where('type', 'handover_scheduled')->latest()->firstOrFail();
+        $this->assertSame($ownerCode, $ownerNotification->data['verification_code']);
+        $this->assertSame('owner', $ownerNotification->data['verification_role']);
+        $this->assertSame($finderCode, $finderNotification->data['verification_code']);
+        $this->assertSame('other participant', $finderNotification->data['verification_role']);
+        $this->assertNotSame($ownerNotification->data['verification_code'], $finderNotification->data['verification_code']);
         $this->actingAs($admin, 'admin')
             ->get(route('admin.handovers.receipt', $handoverId))
             ->assertOk()
-            ->assertSee($code)
+            ->assertDontSee($ownerCode)
+            ->assertDontSee($finderCode)
+            ->assertSee('Both codes must be presented')
             ->assertSee($owner->first_name.' '.$owner->last_name)
             ->assertSee($holder->first_name.' '.$holder->last_name)
             ->assertSee('Security Office')
             ->assertSee('HL-'.str_pad((string) $handoverId, 8, '0', STR_PAD_LEFT));
+        $ownerReceipt = $this->get(route('admin.handovers.receipt', [
+            'handover' => $handoverId,
+            'participant' => 'owner',
+        ]))
+            ->assertOk()
+            ->assertSee('Verification code')
+            ->assertSee($ownerCode)
+            ->assertDontSee($finderCode);
+        $finderReceipt = $this->get(route('admin.handovers.receipt', [
+            'handover' => $handoverId,
+            'participant' => 'finder',
+        ]))
+            ->assertOk()
+            ->assertSee('Verification code')
+            ->assertSee($finderCode)
+            ->assertDontSee($ownerCode);
+        $this->assertSame(
+            str_replace($ownerCode, '[verification code]', $ownerReceipt->getContent()),
+            str_replace($finderCode, '[verification code]', $finderReceipt->getContent()),
+        );
+        $this->get(route('admin.handovers.receipt', [
+            'handover' => $handoverId,
+            'participant' => 'unknown',
+        ]))->assertNotFound();
 
         $this->actingAs($admin, 'admin')
-            ->post(route('admin.handovers.complete', $handoverId), ['code' => str_repeat('0', 16)])
+            ->post(route('admin.handovers.complete', $handoverId), [
+                'owner_code' => $ownerCode,
+            ])
+            ->assertSessionHasErrors(['finder_code']);
+        $this->post(route('admin.handovers.complete', $handoverId), [
+            'owner_code' => $ownerCode,
+            'finder_code' => $ownerCode,
+        ])->assertSessionHasErrors(['owner_code']);
+        $this->post(route('admin.handovers.complete', $handoverId), [
+            'owner_code' => $ownerCode,
+            'finder_code' => str_repeat('0', 16),
+        ])
             ->assertUnprocessable();
-        $this->post(route('admin.handovers.complete', $handoverId), ['code' => $code])
+        $this->post(route('admin.handovers.complete', $handoverId), [
+            'owner_code' => $finderCode,
+            'finder_code' => $ownerCode,
+        ])->assertUnprocessable();
+        $this->post(route('admin.handovers.complete', $handoverId), [
+            'owner_code' => $ownerCode,
+            'finder_code' => $finderCode,
+        ])
             ->assertRedirect();
 
         $this->assertDatabaseHas('handovers', [
             'id' => $handoverId,
             'status' => 'completed',
         ]);
+    }
+
+    public function test_migration_rotates_a_shared_code_into_private_participant_codes(): void
+    {
+        [$owner, $finder, $category, $location] = $this->createParticipants();
+        $post = Post::create([
+            'user_id' => $owner->id,
+            'type' => 'lost',
+            'item_name' => 'Legacy shared-code item',
+            'description' => 'Lost on campus.',
+            'category_id' => $category->id,
+            'color' => 'Blue',
+            'location_id' => $location->id,
+            'event_date' => today(),
+            'status' => 'handover_pending',
+        ]);
+        $sighting = LostSighting::create([
+            'post_id' => $post->id,
+            'user_id' => $finder->id,
+            'answer' => 'yes',
+            'author_decision' => 'approved',
+            'admin_decision' => 'approved',
+        ]);
+        $handover = Handover::create([
+            'sighting_id' => $sighting->id,
+            'status' => 'scheduled',
+            'owner_confirmed_at' => now(),
+            'finder_confirmed_at' => now(),
+            'scheduled_at' => now()->addDay(),
+            'owner_code_hash' => Hash::make('1234567890123456'),
+            'owner_code_encrypted' => Crypt::encryptString('1234567890123456'),
+            'owner_code_lookup' => hash_hmac('sha256', '1234567890123456', config('app.key')),
+            'finder_code_hash' => Hash::make('6543210987654321'),
+            'finder_code_encrypted' => Crypt::encryptString('6543210987654321'),
+            'finder_code_lookup' => hash_hmac('sha256', '6543210987654321', config('app.key')),
+        ]);
+
+        $migration = require database_path('migrations/2026_11_05_000004_split_handover_verification_codes.php');
+        $migration->down();
+        foreach ([$owner, $finder] as $participant) {
+            $participant->notifications()->create([
+                'id' => (string) \Illuminate\Support\Str::uuid(),
+                'type' => 'handover_scheduled',
+                'data' => [
+                    'title' => 'Handover receipt ready',
+                    'body' => 'Receipt code: 1234567890123456',
+                    'handover_id' => $handover->id,
+                ],
+            ]);
+        }
+        $migration->up();
+
+        Sanctum::actingAs($owner);
+        $ownerCode = $this->getJson('/api/v1/handovers')
+            ->assertOk()
+            ->json('data.0.receipt_code');
+        Sanctum::actingAs($finder);
+        $finderCode = $this->getJson('/api/v1/handovers')
+            ->assertOk()
+            ->json('data.0.receipt_code');
+
+        $this->assertNotSame('1234567890123456', $ownerCode);
+        $this->assertNotSame('1234567890123456', $finderCode);
+        $this->assertNotSame($ownerCode, $finderCode);
+        foreach ([$owner, $finder] as $participant) {
+            $notification = $participant->notifications()->where('type', 'handover_scheduled')->firstOrFail();
+            $this->assertStringNotContainsString('1234567890123456', $notification->data['body']);
+            $this->assertStringContainsString('Inbox > Handovers', $notification->data['body']);
+        }
     }
 
     public function test_post_author_can_decline_an_admin_approved_found_claim_without_creating_handover(): void
@@ -364,12 +511,15 @@ class LostItemHandoverTest extends TestCase
         Sanctum::actingAs($author);
         $this->patchJson("/api/v1/claims/{$claim->id}/post-author-decision", [
             'decision' => 'reject',
+            'reason' => 'The answers did not match the item details.',
         ])->assertOk()
             ->assertJsonPath('decision', 'reject');
 
         $this->assertDatabaseHas('claim_requests', [
             'id' => $claim->id,
+            'status' => 'rejected',
             'author_decision' => 'rejected',
+            'author_decision_reason' => 'The answers did not match the item details.',
         ]);
         $this->assertDatabaseHas('posts', ['id' => $post->id, 'status' => 'active']);
         $this->assertDatabaseMissing('handovers', ['claim_id' => $claim->id]);
@@ -446,7 +596,6 @@ class LostItemHandoverTest extends TestCase
             'name' => 'Security Office',
             'is_active' => true,
         ]);
-        $code = '1234567890123456';
         $handover = Handover::create([
             'sighting_id' => $sighting->id,
             'status' => 'scheduled',
@@ -455,9 +604,6 @@ class LostItemHandoverTest extends TestCase
             'finder_confirmed_at' => now(),
             'scheduled_at' => now()->addDays(3),
             'location_id' => $meetupLocation->id,
-            'code_hash' => Hash::make($code),
-            'code_encrypted' => Crypt::encryptString($code),
-            'code_lookup' => hash_hmac('sha256', $code, config('app.key')),
             'expires_at' => now()->addDays(3)->endOfDay(),
         ]);
         $requestedDate = now()->addDays(5)->toDateString();
@@ -544,8 +690,6 @@ class LostItemHandoverTest extends TestCase
             'owner_confirmed_at' => now()->subDay(),
             'finder_confirmed_at' => now()->subDay(),
             'scheduled_at' => now()->addHour(),
-            'code_hash' => Hash::make('1234567890123456'),
-            'code_encrypted' => Crypt::encryptString('1234567890123456'),
         ]);
 
         $this->travel(2)->hours();

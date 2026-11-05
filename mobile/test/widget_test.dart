@@ -17,6 +17,7 @@ void main() {
       'author_first_name': 'Mika',
       'is_mine': true,
       'is_handover_participant': true,
+      'has_submitted_claim': true,
       'retrieval_request_status': 'pending',
       'verification_questions': [
         {'id': 1, 'question': 'What sticker is on the bottle?'},
@@ -27,6 +28,7 @@ void main() {
     expect(post.type, 'found');
     expect(post.questions, ['What sticker is on the bottle?']);
     expect(post.isMine, isTrue);
+    expect(post.hasSubmittedClaim, isTrue);
     expect(post.isHandoverParticipant, isTrue);
     expect(post.retrievalRequestStatus, 'pending');
     expect(post.toString(), isNot(contains('answer')));

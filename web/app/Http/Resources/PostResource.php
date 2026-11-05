@@ -15,6 +15,18 @@ class PostResource extends JsonResource
         $authenticatedUserId = $request->user()?->getAuthIdentifier();
         $isMine = $authenticatedUserId !== null
             && (string) $authenticatedUserId === (string) $this->user_id;
+        $myClaim = $authenticatedUserId !== null && $this->type === 'found'
+            ? ($this->relationLoaded('claimRequests')
+                ? $this->claimRequests->first()
+                : $this->claimRequests()
+                    ->where('claimant_id', $authenticatedUserId)
+                    ->latest()
+                    ->orderByDesc('id')
+                    ->first(['status', 'author_decision']))
+            : null;
+        $hasSubmittedClaim = $myClaim !== null
+            && $myClaim->status !== 'rejected'
+            && $myClaim->author_decision !== 'rejected';
         $isHandoverParticipant = $isMine;
         if (
             ! $isHandoverParticipant
@@ -77,6 +89,7 @@ class PostResource extends JsonResource
                 ? PublicMediaUrl::forPath($this->author->profile_picture_path)
                 : null,
             'is_mine' => $isMine,
+            'has_submitted_claim' => $hasSubmittedClaim,
             'is_handover_participant' => $isHandoverParticipant,
             'retrieval_request_status' => $isMine
                 ? $this->whenLoaded('latestRetrievalRequest', fn () => $this->latestRetrievalRequest?->status)

@@ -5,6 +5,7 @@ namespace Tests\Feature;
 use App\Models\Category;
 use App\Models\ClaimRequest;
 use App\Models\Conversation;
+use App\Models\Handover;
 use App\Models\Location;
 use App\Models\LostSighting;
 use App\Models\Post;
@@ -21,7 +22,7 @@ class EngagementWorkflowTest extends TestCase
 {
     use RefreshDatabase;
 
-    public function test_claim_cannot_be_resubmitted_while_pending_and_retry_waits_24_hours(): void
+    public function test_claim_waits_for_owner_decision_and_can_be_retried_after_rejection(): void
     {
         [$owner, $claimant, $category, $location] = $this->createParticipants();
         $post = $this->createPost($owner, $category, $location, 'found');
@@ -71,6 +72,9 @@ class EngagementWorkflowTest extends TestCase
                 ->assertOk()
                 ->json('data.can_submit_another'),
         );
+        $this->getJson('/api/v1/posts?type=found')
+            ->assertOk()
+            ->assertJsonPath('data.0.has_submitted_claim', true);
 
         $this->postJson("/api/v1/posts/{$post->id}/claims", [
             'answers' => ['duplicate attempt'],
@@ -80,32 +84,38 @@ class EngagementWorkflowTest extends TestCase
             ->post(route('admin.claims.decide', $claimId), [
                 'decision' => 'reject',
                 'reason' => 'The evidence does not match.',
-            ])->assertRedirect();
+            ])->assertConflict();
+        Sanctum::actingAs($owner);
+        $this->getJson('/api/v1/claims/awaiting-post-author')
+            ->assertOk()
+            ->assertJsonPath('data.0.id', $claimId)
+            ->assertJsonPath('data.0.post_id', $post->id)
+            ->assertJsonPath('data.0.answers.0', 'blue initials')
+            ->assertJsonPath('data.0.verification_questions.0.answer', 'Private label');
+        $this->patchJson("/api/v1/claims/{$claimId}/post-author-decision", [
+            'decision' => 'reject',
+            'reason' => 'The answer does not match the label.',
+        ])->assertOk()
+            ->assertJsonPath('decision', 'reject');
         $this->assertDatabaseHas('claim_requests', [
             'id' => $claimId,
             'status' => 'rejected',
+            'author_decision_reason' => 'The answer does not match the label.',
         ]);
         $this->assertDatabaseHas('posts', [
             'id' => $post->id,
             'status' => 'active',
         ]);
+        $this->getJson('/api/v1/posts?type=found')
+            ->assertOk()
+            ->assertJsonPath('data.0.has_submitted_claim', false);
 
         Sanctum::actingAs($claimant);
-        $this->postJson("/api/v1/posts/{$post->id}/claims", [
-            'answers' => ['rejected too soon'],
-            'evidence_images' => [UploadedFile::fake()->image('ownership-rejected-too-soon.jpg')],
-        ])->assertConflict();
-        $this->travel(23)->hours();
-        $this->postJson("/api/v1/posts/{$post->id}/claims", [
-            'answers' => ['still inside cooldown'],
-            'evidence_images' => [UploadedFile::fake()->image('ownership-cooldown.jpg')],
-        ])->assertConflict();
-        $this->travel(1)->hours();
-
         $this->getJson("/api/v1/posts/{$post->id}/my-claim")
             ->assertOk()
             ->assertJsonPath('data.can_submit_another', true)
-            ->assertJsonPath('data.attempts_used', 1);
+            ->assertJsonPath('data.attempts_used', 1)
+            ->assertJsonPath('data.author_decision_reason', 'The answer does not match the label.');
 
         $retry = $this->post("/api/v1/posts/{$post->id}/claims", [
             'answers' => ['corrected answer'],
@@ -116,6 +126,9 @@ class EngagementWorkflowTest extends TestCase
             ->assertJsonPath('can_submit_another', false);
         $this->assertNotSame($claimId, $retry->json('claim_id'));
         $this->assertDatabaseCount('claim_requests', 2);
+        $this->getJson('/api/v1/posts?type=found')
+            ->assertOk()
+            ->assertJsonPath('data.0.has_submitted_claim', true);
         $this->assertDatabaseHas('posts', [
             'id' => $post->id,
             'status' => 'claim_pending',
@@ -175,16 +188,15 @@ class EngagementWorkflowTest extends TestCase
         Storage::disk('public')->assertExists($updatedImagePath);
         Storage::disk('public')->assertMissing($originalImagePath);
 
-        $admin = $this->createUser('Claims', 'Admin', 'claims-edit-admin', 'admin');
-        $this->actingAs($admin, 'admin')
-            ->post(route('admin.claims.decide', $claimId), [
-                'decision' => 'reject',
-                'reason' => 'The evidence does not match.',
-            ])->assertRedirect();
+        Sanctum::actingAs($owner);
+        $this->patchJson("/api/v1/claims/{$claimId}/post-author-decision", [
+            'decision' => 'approve',
+            'reason' => 'The identifying marks match.',
+        ])->assertOk();
         Sanctum::actingAs($claimant);
         $this->post("/api/v1/posts/{$post->id}/claims/{$claimId}", [
             '_method' => 'PATCH',
-            'answers' => ['edit after rejection'],
+            'answers' => ['edit after owner decision'],
         ])->assertConflict();
     }
 
@@ -201,8 +213,6 @@ class EngagementWorkflowTest extends TestCase
             'question' => 'What is written inside?',
             'answer' => 'Private label',
         ]);
-        $admin = $this->createUser('Claims', 'Admin', 'claims-limit-admin', 'admin');
-
         Sanctum::actingAs($claimant);
         $first = $this->post("/api/v1/posts/{$post->id}/claims", [
             'answers' => ['blue initials'],
@@ -210,18 +220,13 @@ class EngagementWorkflowTest extends TestCase
         ])->assertCreated();
         $firstId = $first->json('claim_id');
 
-        $this->actingAs($admin, 'admin')
-            ->post(route('admin.claims.decide', $firstId), [
-                'decision' => 'reject',
-                'reason' => 'The evidence does not match.',
-            ])->assertRedirect();
+        Sanctum::actingAs($owner);
+        $this->patchJson("/api/v1/claims/{$firstId}/post-author-decision", [
+            'decision' => 'reject',
+            'reason' => 'The evidence does not match.',
+        ])->assertOk();
 
         Sanctum::actingAs($claimant);
-        $this->post("/api/v1/posts/{$post->id}/claims", [
-            'answers' => ['too soon'],
-            'evidence_images' => [UploadedFile::fake()->image('ownership-too-soon.jpg')],
-        ])->assertConflict();
-        $this->travel(24)->hours();
         $second = $this->post("/api/v1/posts/{$post->id}/claims", [
             'answers' => ['updated blue initials'],
             'evidence_images' => [UploadedFile::fake()->image('ownership-2.jpg')],
@@ -229,23 +234,54 @@ class EngagementWorkflowTest extends TestCase
         $secondId = $second->json('claim_id');
         $this->assertSame(2, $second->json('attempt_no'));
 
-        $this->actingAs($admin, 'admin')
-            ->post(route('admin.claims.decide', $secondId), [
-                'decision' => 'reject',
-                'reason' => 'The new evidence does not match.',
-            ])->assertRedirect();
+        Sanctum::actingAs($owner);
+        $this->patchJson("/api/v1/claims/{$secondId}/post-author-decision", [
+            'decision' => 'reject',
+            'reason' => 'The new evidence does not match.',
+        ])->assertOk();
 
         Sanctum::actingAs($claimant);
-        $this->post("/api/v1/posts/{$post->id}/claims", [
-            'answers' => ['too soon again'],
-            'evidence_images' => [UploadedFile::fake()->image('ownership-too-soon-2.jpg')],
-        ])->assertStatus(429);
-        $this->travel(24)->hours();
         $this->post("/api/v1/posts/{$post->id}/claims", [
             'answers' => ['third attempt'],
             'evidence_images' => [UploadedFile::fake()->image('ownership-3.jpg')],
         ])->assertStatus(429);
         $this->assertDatabaseCount('claim_requests', 2);
+    }
+
+    public function test_claimant_can_submit_again_after_an_unsuccessful_handover_reopens_the_post(): void
+    {
+        [$owner, $claimant, $category, $location] = $this->createParticipants();
+        $post = $this->createPost($owner, $category, $location, 'found');
+        VerificationQuestion::create([
+            'post_id' => $post->id,
+            'question' => 'What is written inside?',
+            'answer' => 'Private label',
+        ]);
+        $claim = ClaimRequest::create([
+            'post_id' => $post->id,
+            'claimant_id' => $claimant->id,
+            'answers' => ['private label'],
+            'attempt_no' => 1,
+            'status' => 'approved',
+            'author_decision' => 'approved',
+        ]);
+        Handover::create([
+            'claim_id' => $claim->id,
+            'status' => 'unsuccessful',
+            'failure_reason' => 'The scheduled handover did not occur.',
+            'unsuccessful_at' => now(),
+        ]);
+
+        Sanctum::actingAs($claimant);
+        $this->getJson("/api/v1/posts/{$post->id}/my-claim")
+            ->assertOk()
+            ->assertJsonPath('data.handover_unsuccessful', true)
+            ->assertJsonPath('data.can_submit_another', true);
+        $this->post("/api/v1/posts/{$post->id}/claims", [
+            'answers' => ['updated private label'],
+            'evidence_images' => [UploadedFile::fake()->image('ownership-after-handover.jpg')],
+        ])->assertCreated()
+            ->assertJsonPath('attempt_no', 2);
     }
 
     public function test_lost_evidence_is_visible_to_its_owner_and_can_open_an_admin_chat(): void

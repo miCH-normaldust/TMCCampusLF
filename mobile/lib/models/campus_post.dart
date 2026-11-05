@@ -19,6 +19,7 @@ class CampusPost {
     required this.authorProfilePictureUrl,
     required this.questions,
     required this.isMine,
+    required this.hasSubmittedClaim,
     required this.isHandoverParticipant,
     required this.images,
     required this.createdAt,
@@ -44,6 +45,7 @@ class CampusPost {
   final String? authorProfilePictureUrl;
   final List<String> questions;
   final bool isMine;
+  final bool hasSubmittedClaim;
   final bool isHandoverParticipant;
   final List<Map<String, String>> images;
   final String createdAt;
@@ -77,6 +79,7 @@ class CampusPost {
                 .toList()
           : const [],
       isMine: json['is_mine'] as bool? ?? false,
+      hasSubmittedClaim: json['has_submitted_claim'] as bool? ?? false,
       isHandoverParticipant:
           json['is_handover_participant'] as bool? ?? false,
       images: rawImages is List
@@ -129,6 +132,7 @@ class CampusPost {
       authorProfilePictureUrl: authorProfilePictureUrl,
       questions: questions,
       isMine: isMine,
+      hasSubmittedClaim: hasSubmittedClaim,
       isHandoverParticipant: isHandoverParticipant,
       images: images,
       createdAt: createdAt,

@@ -20,13 +20,22 @@
         <p>Handover place: <strong>{{ $handover->location?->name ?? 'TMC campus' }}</strong></p>
         <p>Owner: {{ $owner?->first_name }} {{ $owner?->last_name }}</p>
         <p>Person handing over: {{ $holder?->first_name }} {{ $holder?->last_name }}</p>
+        @isset($verificationCode)
+            <h2>Verification code</h2>
+            <p class="handover-receipt-code">{{ $verificationCode }}</p>
+            <p>Present this code to TMC staff. Both participants must present their separate codes.</p>
+        @else
+            <p>Each participant receives a separate verification code in CampusLF Inbox &gt; Handovers. Both codes must be presented to TMC staff to confirm retrieval.</p>
+        @endisset
         <p>Receipt generated: {{ now()->format('M j, Y g:i A') }}</p>
-        <div style="border: 2px dashed currentColor; margin: 28px auto; padding: 20px; max-width: 400px">
-            <p class="eyebrow">UNIQUE 16-DIGIT VERIFICATION CODE</p>
-            <strong style="font-size: 2rem; letter-spacing: .15em">{{ $code }}</strong>
-        </div>
-        <p>Present this receipt at the scheduled location. TMC staff will verify the code and confirm retrieval.</p>
         <button class="button" type="button" onclick="window.print()">Print receipt</button>
     </article>
-    <style>@media print { .admin-sidebar, .admin-header, .button { display: none !important } body { background: white } }</style>
+    <style>
+        @media print {
+            .side, .top, .button { display: none !important }
+            body { background: white !important; color: #000 !important }
+            .shell, .content, main { display: block !important; width: auto !important; margin: 0 !important; padding: 0 !important }
+            article.card { max-width: none !important; border: 0 !important; box-shadow: none !important }
+        }
+    </style>
 @endsection

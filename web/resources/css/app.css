@@ -2234,6 +2234,27 @@ body.image-modal-open {
     height: auto;
 }
 
+.handover-confirm-panel {
+    width: min(620px, 100%);
+}
+
+.handover-confirm-body {
+    display: block;
+}
+
+.handover-receipt-links {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 16px;
+}
+
+.handover-receipt-code {
+    font-size: 24px;
+    font-weight: 700;
+    letter-spacing: .12em;
+}
+
 @media (max-width: 640px) {
     .image-modal {
         padding: 12px;

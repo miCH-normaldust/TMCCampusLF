@@ -44,6 +44,12 @@ class PostController extends Controller
                 'location:id,name',
                 'images',
                 'verificationQuestions',
+                'claimRequests' => fn ($query) => $query
+                    ->where('claimant_id', $request->user()->id)
+                    ->latest()
+                    ->orderByDesc('id')
+                    ->limit(1)
+                    ->select(['id', 'post_id', 'status', 'author_decision']),
                 'reactions' => fn ($query) => $query->where('user_id', $request->user()?->id),
             ])
             ->withCount(['comments', 'reactions'])

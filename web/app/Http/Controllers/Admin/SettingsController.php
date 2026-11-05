@@ -29,6 +29,7 @@ class SettingsController extends Controller
         $data = $request->validate([
             'posts_per_day' => ['required', 'integer', 'min:1', 'max:50'],
             'claims_per_day' => ['required', 'integer', 'min:1', 'max:50'],
+            'found_it_per_day' => ['required', 'integer', 'min:1', 'max:50'],
             'claim_attempts' => ['required', 'integer', 'min:1', 'max:10'],
             'proof_attempts' => ['required', 'integer', 'min:1', 'max:10'],
             'handover_reschedule_attempts' => ['required', 'integer', 'min:1', 'max:10'],

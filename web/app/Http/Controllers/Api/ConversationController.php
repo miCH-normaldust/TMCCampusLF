@@ -384,12 +384,19 @@ class ConversationController extends Controller
                     'scheduled_at' => $handover->scheduled_at,
                     'location' => $handover->location?->name,
                     'location_description' => $handover->location?->description,
-                    'receipt_code' => $handover->code_encrypted !== null
+                    'receipt_code' => ($isOwner
+                        ? $handover->owner_code_encrypted
+                        : $handover->finder_code_encrypted) !== null
                         && $handover->status === 'scheduled'
                         && $handover->owner_confirmed_at !== null
                         && $handover->finder_confirmed_at !== null
-                            ? Crypt::decryptString($handover->code_encrypted)
+                            ? Crypt::decryptString(
+                                $isOwner
+                                    ? $handover->owner_code_encrypted
+                                    : $handover->finder_code_encrypted,
+                            )
                             : null,
+                    'receipt_code_role' => $isOwner ? 'Owner' : 'Other participant',
                     'reschedule_attempts' => $handover->reschedule_attempts,
                     'reschedule_limit' => (int) DB::table('settings')
                         ->where('key', 'handover_reschedule_attempts')

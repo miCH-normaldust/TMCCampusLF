@@ -180,6 +180,16 @@ class InteractionController extends Controller
                 return [$sighting, false];
             }
 
+            $dailyLimit = (int) DB::table('settings')->where('key', 'found_it_per_day')->value('value') ?: 5;
+            abort_if(
+                LostSighting::where('user_id', $request->user()->id)
+                    ->where('answer', 'yes')
+                    ->whereDate('created_at', today())
+                    ->count() >= $dailyLimit,
+                429,
+                'Daily I Found It limit reached.',
+            );
+
             $userSightings = $lockedPost->sightings()
                 ->where('user_id', $request->user()->id)
                 ->where('answer', 'yes')

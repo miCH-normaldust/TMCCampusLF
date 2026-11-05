@@ -80,27 +80,24 @@ class HandoverController extends Controller
                 409,
                 'Both participants must agree before a handover can be scheduled.',
             );
-            $code = $this->newReceiptCode();
+            $codes = $this->newReceiptCodes();
             $location = MeetupLocation::findOrFail($data['location_id']);
             $locked->update([
                 'status' => 'scheduled',
                 'location_id' => $location->id,
                 'scheduled_at' => $data['scheduled_at'],
-                'code_hash' => Hash::make($code),
-                'code_encrypted' => Crypt::encryptString($code),
-                'code_lookup' => hash_hmac('sha256', $code, config('app.key')),
+                'owner_code_hash' => Hash::make($codes['owner']),
+                'owner_code_encrypted' => Crypt::encryptString($codes['owner']),
+                'owner_code_lookup' => $this->codeLookup($codes['owner']),
+                'finder_code_hash' => Hash::make($codes['finder']),
+                'finder_code_encrypted' => Crypt::encryptString($codes['finder']),
+                'finder_code_lookup' => $this->codeLookup($codes['finder']),
                 'expires_at' => Carbon::parse($data['scheduled_at']),
                 'reschedule_requested_at' => null,
                 'requested_date' => null,
                 'reschedule_reason' => null,
             ]);
-            $this->notifyParticipants(
-                $locked,
-                'handover_scheduled',
-                'Handover receipt ready',
-                'Your handover is scheduled for '.$locked->scheduled_at->format('M j, Y g:i A').' at '.$location->name.'. Receipt code: '.$code,
-                ['handover_id' => $locked->id],
-            );
+            $this->notifyHandoverScheduled($locked, $codes, $location);
             $this->audit($request, 'handover_scheduled', $locked, 'Scheduled at '.$location->name.' for '.$locked->scheduled_at->toIso8601String());
         });
 
@@ -141,22 +138,26 @@ class HandoverController extends Controller
     {
         $expiry->expirePastDue();
         $handover->refresh();
-        $data = $request->validate(['code' => ['required', 'digits:16']]);
+        $data = $request->validate([
+            'owner_code' => ['required', 'digits:16', 'different:finder_code'],
+            'finder_code' => ['required', 'digits:16'],
+        ]);
         abort_unless($handover->status === 'scheduled', 409, 'Only scheduled handovers can be completed.');
-        abort_unless(
-            $handover->code_hash && Hash::check($data['code'], $handover->code_hash),
-            422,
-            'The receipt code is invalid.',
-        );
 
         DB::transaction(function () use ($request, $handover, $data): void {
             $locked = Handover::whereKey($handover->id)->lockForUpdate()->firstOrFail();
             abort_unless(
-                $locked->status === 'scheduled'
-                    && $locked->code_hash
-                    && Hash::check($data['code'], $locked->code_hash),
+                $locked->status === 'scheduled',
                 409,
                 'This handover is not available for completion.',
+            );
+            abort_unless(
+                $locked->owner_code_hash
+                    && $locked->finder_code_hash
+                    && Hash::check($data['owner_code'], $locked->owner_code_hash)
+                    && Hash::check($data['finder_code'], $locked->finder_code_hash),
+                422,
+                'Both participant verification codes must be valid.',
             );
             $locked->update([
                 'status' => 'completed',
@@ -166,28 +167,35 @@ class HandoverController extends Controller
             ]);
             ($locked->claimRequest?->post ?? $locked->sighting?->post)?->update(['status' => 'retrieved']);
             $this->notifyParticipants($locked, 'handover_completed', 'Item retrieval confirmed', 'TMC confirmed that the item was retrieved from the scheduled handover location.');
-            $this->audit($request, 'handover_completed', $locked, 'Receipt code verified.');
+            $this->audit($request, 'handover_completed', $locked, 'Both participant verification codes verified.');
         });
 
         return back()->with('status', 'Item retrieval confirmed and the origin post is marked retrieved.');
     }
 
-    public function receipt(Handover $handover, HandoverExpiry $expiry): View
+    public function receipt(Request $request, Handover $handover, HandoverExpiry $expiry): View
     {
         $expiry->expirePastDue();
         $handover->refresh();
+        $participant = $request->query('participant');
+        abort_if($participant !== null && ! in_array($participant, ['owner', 'finder'], true), 404);
         abort_unless(
             $handover->status === 'scheduled'
                 && $handover->owner_confirmed_at !== null
                 && $handover->finder_confirmed_at !== null
-                && $handover->code_encrypted,
+                && $handover->owner_code_encrypted
+                && $handover->finder_code_encrypted,
             404,
         );
         $handover->load($this->relations());
 
         return view('admin.handover-receipt', [
             'handover' => $handover,
-            'code' => Crypt::decryptString($handover->code_encrypted),
+            'verificationCode' => match ($participant) {
+                'owner' => Crypt::decryptString($handover->owner_code_encrypted),
+                'finder' => Crypt::decryptString($handover->finder_code_encrypted),
+                default => null,
+            },
         ]);
     }
 
@@ -229,14 +237,67 @@ class HandoverController extends Controller
         ];
     }
 
+    /**
+     * @return array{owner: string, finder: string}
+     */
+    private function newReceiptCodes(): array
+    {
+        $ownerCode = $this->newReceiptCode();
+        do {
+            $finderCode = $this->newReceiptCode();
+        } while ($finderCode === $ownerCode);
+
+        return ['owner' => $ownerCode, 'finder' => $finderCode];
+    }
+
     private function newReceiptCode(): string
     {
         do {
             $code = str_pad((string) random_int(0, 9999999999999999), 16, '0', STR_PAD_LEFT);
-            $lookup = hash_hmac('sha256', $code, config('app.key'));
-        } while (Handover::where('code_lookup', $lookup)->exists());
+            $lookup = $this->codeLookup($code);
+        } while (Handover::where('owner_code_lookup', $lookup)
+            ->orWhere('finder_code_lookup', $lookup)
+            ->exists());
 
         return $code;
+    }
+
+    private function codeLookup(string $code): string
+    {
+        return hash_hmac('sha256', $code, config('app.key'));
+    }
+
+    /**
+     * @param  array{owner: string, finder: string}  $codes
+     */
+    private function notifyHandoverScheduled(
+        Handover $handover,
+        array $codes,
+        MeetupLocation $location,
+    ): void {
+        $handover->loadMissing(['claimRequest.post', 'sighting.post']);
+        $claim = $handover->claimRequest;
+        $sighting = $handover->sighting;
+        $participants = [
+            $claim?->claimant_id ?? $sighting?->post?->user_id => ['role' => 'owner', 'code' => $codes['owner']],
+            $claim?->post?->user_id ?? $sighting?->user_id => ['role' => 'other participant', 'code' => $codes['finder']],
+        ];
+        $scheduledAt = $handover->scheduled_at?->format('M j, Y g:i A');
+
+        foreach (User::whereIn('id', array_keys($participants))->get() as $participant) {
+            $verification = $participants[$participant->id];
+            $participant->notifications()->create([
+                'id' => (string) Str::uuid(),
+                'type' => 'handover_scheduled',
+                'data' => [
+                    'title' => 'Handover receipt ready',
+                    'body' => "Your handover is scheduled for {$scheduledAt} at {$location->name}. Your {$verification['role']} verification code is {$verification['code']}. TMC requires both participant codes to confirm retrieval.",
+                    'handover_id' => $handover->id,
+                    'verification_code' => $verification['code'],
+                    'verification_role' => $verification['role'],
+                ],
+            ]);
+        }
     }
 
     private function notifyParticipants(

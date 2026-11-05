@@ -7,7 +7,7 @@
         <div>
             <p class="eyebrow">ADMIN-COORDINATED EXCHANGES</p>
             <h1>Handovers</h1>
-            <p class="muted">Collect approval from both participants, set the date and place, then confirm retrieval using the generated receipt code.</p>
+            <p class="muted">Collect approval from both participants, set the date and place, then verify both participants’ codes to confirm retrieval.</p>
         </div>
         <a class="button secondary" href="{{ route('admin.handovers.history') }}">View handover history</a>
     </div>
@@ -69,14 +69,17 @@
                                     <span class="muted">Waiting for both agreements</span>
                                 @endif
                             @elseif ($handover->status === 'scheduled')
-                                <a class="button secondary" href="{{ route('admin.handovers.receipt', $handover) }}" target="_blank" rel="noopener">Print receipt</a>
-                                <form method="post" action="{{ route('admin.handovers.complete', $handover) }}">
-                                    @csrf
-                                    <label>Verify 16-digit receipt code
-                                        <input name="code" inputmode="numeric" pattern="[0-9]{16}" minlength="16" maxlength="16" required>
-                                    </label>
-                                    <button class="button" type="submit">Confirm owner retrieved item</button>
-                                </form>
+                                <button
+                                    class="button"
+                                    type="button"
+                                    data-handover-complete="{{ route('admin.handovers.complete', $handover) }}"
+                                    data-owner-receipt="{{ route('admin.handovers.receipt', ['handover' => $handover, 'participant' => 'owner']) }}"
+                                    data-finder-receipt="{{ route('admin.handovers.receipt', ['handover' => $handover, 'participant' => 'finder']) }}"
+                                    data-handover-id="{{ $handover->id }}"
+                                    data-item-name="{{ $post?->item_name ?? 'Campus item' }}"
+                                    data-owner-name="{{ trim(($owner?->first_name ?? '').' '.($owner?->last_name ?? '')) ?: 'Owner' }}"
+                                    data-finder-name="{{ trim(($finder?->first_name ?? '').' '.($finder?->last_name ?? '')) ?: 'Other participant' }}"
+                                >Confirm retrieval</button>
                             @endif
                         </td>
                     </tr>
@@ -88,4 +91,89 @@
         </div>
         <div class="pagination">{{ $handovers->links() }}</div>
     </section>
+
+    <div class="image-modal handover-confirm-modal" id="handover-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="handover-confirm-title" hidden>
+        <section class="image-modal-panel handover-confirm-panel">
+            <div class="image-modal-head">
+                <div>
+                    <h2 id="handover-confirm-title">Confirm item retrieval</h2>
+                    <p class="image-modal-meta" id="handover-confirm-item"></p>
+                </div>
+                <button class="button secondary" type="button" id="handover-confirm-close">Close</button>
+            </div>
+            <div class="handover-confirm-body">
+                <p>View each participant’s separate receipt, then enter both 16-digit verification codes to confirm retrieval.</p>
+                <div class="handover-receipt-links">
+                    <a class="button secondary" id="owner-receipt-link" href="#" target="_blank" rel="noopener">View owner receipt</a>
+                    <a class="button secondary" id="finder-receipt-link" href="#" target="_blank" rel="noopener">View other participant receipt</a>
+                </div>
+                <form method="post" id="handover-confirm-form">
+                    @csrf
+                    <input type="hidden" name="handover_id" id="handover-confirm-id" value="{{ old('handover_id') }}">
+                    <label id="owner-code-label">Owner’s 16-digit verification code
+                        <input name="owner_code" inputmode="numeric" pattern="[0-9]{16}" minlength="16" maxlength="16" autocomplete="off" required>
+                    </label>
+                    @error('owner_code')<span class="field-error">{{ $message }}</span>@enderror
+                    <label id="finder-code-label">Other participant’s 16-digit verification code
+                        <input name="finder_code" inputmode="numeric" pattern="[0-9]{16}" minlength="16" maxlength="16" autocomplete="off" required>
+                    </label>
+                    @error('finder_code')<span class="field-error">{{ $message }}</span>@enderror
+                    <button class="button" type="submit">Verify both codes and confirm retrieval</button>
+                </form>
+            </div>
+        </section>
+    </div>
+
+    <script>
+        (() => {
+            const modal = document.getElementById('handover-confirm-modal');
+            const form = document.getElementById('handover-confirm-form');
+            const item = document.getElementById('handover-confirm-item');
+            const ownerReceipt = document.getElementById('owner-receipt-link');
+            const finderReceipt = document.getElementById('finder-receipt-link');
+            const handoverId = document.getElementById('handover-confirm-id');
+            const closeButton = document.getElementById('handover-confirm-close');
+            if (!modal || !form || !item || !ownerReceipt || !finderReceipt || !handoverId || !closeButton) return;
+
+            let lastFocused = null;
+            const open = button => {
+                lastFocused = button;
+                form.action = button.dataset.handoverComplete;
+                handoverId.value = button.dataset.handoverId;
+                item.textContent = button.dataset.itemName;
+                ownerReceipt.href = button.dataset.ownerReceipt;
+                ownerReceipt.textContent = 'View owner receipt — ' + button.dataset.ownerName;
+                finderReceipt.href = button.dataset.finderReceipt;
+                finderReceipt.textContent = 'View other participant receipt — ' + button.dataset.finderName;
+                form.elements.owner_code.value = '';
+                form.elements.finder_code.value = '';
+                modal.hidden = false;
+                document.body.classList.add('image-modal-open');
+                closeButton.focus();
+            };
+            const close = () => {
+                modal.hidden = true;
+                document.body.classList.remove('image-modal-open');
+                if (lastFocused) lastFocused.focus();
+            };
+
+            document.querySelectorAll('[data-handover-complete]').forEach(button => {
+                button.addEventListener('click', () => open(button));
+            });
+            closeButton.addEventListener('click', close);
+            modal.addEventListener('click', event => {
+                if (event.target === modal) close();
+            });
+            document.addEventListener('keydown', event => {
+                if (event.key === 'Escape' && !modal.hidden) close();
+            });
+
+            const failedHandover = handoverId.value;
+            if (failedHandover && (@json($errors->has('owner_code') || $errors->has('finder_code')))) {
+                const trigger = [...document.querySelectorAll('[data-handover-complete]')]
+                    .find(button => button.dataset.handoverId === failedHandover);
+                if (trigger) open(trigger);
+            }
+        })();
+    </script>
 @endsection

@@ -327,10 +327,12 @@ class AdminPortalPagesTest extends TestCase
         $this->get(route('admin.settings.index'))
             ->assertOk()
             ->assertSee('settings-limits-grid')
+            ->assertSee('I Found It per day')
             ->assertSee('settings-catalog-grid');
         $this->put(route('admin.settings.update'), [
             'posts_per_day' => 5,
             'claims_per_day' => 5,
+            'found_it_per_day' => 4,
             'claim_attempts' => 3,
             'proof_attempts' => 3,
             'handover_reschedule_attempts' => 2,
@@ -341,6 +343,10 @@ class AdminPortalPagesTest extends TestCase
             'blocked_words' => '',
             'disclaimer' => 'CampusLF connects campus members with their lost items.',
         ])->assertRedirect();
+        $this->assertDatabaseHas('settings', [
+            'key' => 'found_it_per_day',
+            'value' => '4',
+        ]);
 
         $this->assertDatabaseHas('admin_route_usage', [
             'admin_id' => $admin->id,

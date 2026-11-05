@@ -24,9 +24,19 @@
                     <td>{{ $claim->post->author?->first_name }} {{ $claim->post->author?->last_name }}</td>
                     <td>{{ $claim->claimant->first_name }} {{ $claim->claimant->last_name }}<br><span class="muted">{{ $claim->claimant->tmc_id_no }}</span></td>
                     <td>{{ $claim->attempt_no }}</td>
-                    <td><span class="pill">{{ ucfirst($claim->status) }}</span></td>
+                    <td>
+                        <span class="pill">
+                            @if ($claim->status === 'pending' && $claim->author_decision === 'pending')
+                                Awaiting owner
+                            @elseif ($claim->status === 'pending' && $claim->author_decision === 'approved')
+                                Ready for admin
+                            @else
+                                {{ ucfirst($claim->status) }}
+                            @endif
+                        </span>
+                    </td>
                     <td>{{ $claim->created_at->format('M j, Y g:i A') }}</td>
-                    <td><a class="button secondary" href="{{ route('admin.claims.show', $claim) }}">{{ $claim->status === 'pending' ? 'Review claim' : 'View claim' }}</a></td>
+                    <td><a class="button secondary" href="{{ route('admin.claims.show', $claim) }}">{{ $claim->status === 'pending' && $claim->author_decision === 'approved' ? 'Review claim' : 'View claim' }}</a></td>
                 </tr>
             @empty
                 <tr><td colspan="7" class="empty-cell">No claims match this status.</td></tr>

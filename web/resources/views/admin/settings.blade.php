@@ -16,6 +16,7 @@
                 @foreach ([
                     'posts_per_day' => 'Posts per day',
                     'claims_per_day' => 'Claims per day',
+                    'found_it_per_day' => 'I Found It per day',
                     'claim_attempts' => 'Claim attempts per item',
                     'proof_attempts' => 'Proof submissions per item',
                     'handover_reschedule_attempts' => 'Handover reschedules per item',

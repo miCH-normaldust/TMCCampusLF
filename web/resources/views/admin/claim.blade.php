@@ -29,14 +29,26 @@
     </section>
     <section class="section card">
         <h2>Decision</h2>
-        <form method="post" action="{{ route('admin.claims.decide', $claim) }}">
-            @csrf
-            <p class="muted">Approval sends the claim to the item poster for their agreement. Handover starts only after both administrator review and poster consent.</p>
-            <p><label for="reason">Reason (required when rejecting)</label><br><textarea id="reason" name="reason" rows="3" maxlength="1000"></textarea></p>
-            @error('decision')<p class="muted">{{ $message }}</p>@enderror
-            @error('reason')<p class="muted">{{ $message }}</p>@enderror
-            <button class="button" name="decision" value="approve" type="submit">Approve claim</button>
-            <button class="button danger" name="decision" value="reject" type="submit" onclick="return confirm('Reject this claim?')">Reject claim</button>
-        </form>
+        @if ($claim->author_decision_reason)
+            <p><strong>Owner's reason:</strong> {{ $claim->author_decision_reason }}</p>
+        @endif
+        @if ($claim->author_decision === 'pending')
+            <p class="muted">The item owner must decide first. Administrator review becomes available after the owner approves.</p>
+        @elseif ($claim->status === 'pending')
+            <p class="muted">The item owner approved this claim. Handover starts only after administrator approval.</p>
+            <form method="post" action="{{ route('admin.claims.decide', $claim) }}">
+                @csrf
+                <p><label for="reason">Reason (required when rejecting)</label><br><textarea id="reason" name="reason" rows="3" maxlength="1000"></textarea></p>
+                @error('decision')<p class="muted">{{ $message }}</p>@enderror
+                @error('reason')<p class="muted">{{ $message }}</p>@enderror
+                <button class="button" name="decision" value="approve" type="submit">Approve claim</button>
+                <button class="button danger" name="decision" value="reject" type="submit" onclick="return confirm('Reject this claim?')">Reject claim</button>
+            </form>
+        @else
+            <p>This claim is {{ $claim->status }}.</p>
+            @if ($claim->review_reason)
+                <p><strong>Administrator's reason:</strong> {{ $claim->review_reason }}</p>
+            @endif
+        @endif
     </section>
 @endsection

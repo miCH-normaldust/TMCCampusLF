@@ -39,6 +39,7 @@ class CampuslfSeeder extends Seeder
             'proof_attempts' => '3',
             'handover_reschedule_attempts' => '2',
             'claims_per_day' => '5',
+            'found_it_per_day' => '5',
             'comments_per_day' => '30',
             'reports_per_day' => '5',
             'report_threshold' => '3',

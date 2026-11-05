@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Admin;
 use App\Http\Controllers\Controller;
 use App\Models\ClaimRequest;
 use App\Models\Conversation;
+use App\Models\Handover;
 use App\Models\Post;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
@@ -42,13 +43,18 @@ class ClaimReviewController extends Controller
                 ->lockForUpdate()
                 ->firstOrFail();
             abort_unless($claim->status === 'pending', 409, 'This claim has already been reviewed.');
+            abort_unless(
+                $claim->author_decision === 'approved',
+                409,
+                'The post owner must approve this claim before administrator review.',
+            );
 
             if ($data['decision'] === 'approve') {
                 $claim->update([
                     'status' => 'approved',
-                    'author_decision' => 'pending',
                     'reviewed_by' => $request->user('admin')->id,
                     'reviewed_at' => now(),
+                    'review_reason' => null,
                 ]);
                 $post->update(['status' => 'handover_pending']);
                 $otherClaims = ClaimRequest::with('claimant')
@@ -60,22 +66,32 @@ class ClaimReviewController extends Controller
                     $otherClaim->update([
                         'status' => 'rejected',
                         'author_decision' => 'rejected',
+                        'author_decision_reason' => 'Another claim was approved for this item.',
                         'reviewed_by' => $request->user('admin')->id,
                         'reviewed_at' => now(),
+                        'review_reason' => 'Another claim was approved for this item.',
                     ]);
                     $otherClaim->claimant->notifications()->create([
                         'id' => (string) Str::uuid(),
                         'type' => 'claim_rejected',
-                        'data' => ['title' => 'Claim not approved', 'body' => 'Another claim for this item was approved.'],
+                        'data' => [
+                            'title' => 'Claim not approved',
+                            'body' => 'Another claim for this item was approved.',
+                            'claim_id' => $otherClaim->id,
+                        ],
                     ]);
                 }
                 $conversation = Conversation::firstOrCreate(['claim_id' => $claim->id]);
+                Handover::firstOrCreate(
+                    ['claim_id' => $claim->id],
+                    ['status' => 'awaiting_participants', 'admin_approved_at' => now()],
+                );
                 $post->author->notifications()->create([
                     'id' => (string) Str::uuid(),
                     'type' => 'claim_approved',
                     'data' => [
                         'title' => 'Claim approved',
-                        'body' => 'A claim for your found item was approved.',
+                        'body' => 'TMC administrators approved the claim you agreed to. The handover can now proceed.',
                         'post_id' => $claim->post_id,
                         'claim_id' => $claim->id,
                     ],
@@ -84,44 +100,30 @@ class ClaimReviewController extends Controller
                     'id' => (string) Str::uuid(),
                     'type' => 'claim_approved',
                     'data' => [
-                        'title' => 'Claim approved for owner review',
-                        'body' => 'An administrator approved your claim. The item poster must agree before handover can proceed.',
+                        'title' => 'Claim approved',
+                        'body' => 'TMC administrators approved your claim. Open Inbox > Handovers to confirm the exchange.',
                         'post_id' => $claim->post_id,
                         'claim_id' => $claim->id,
-                    ],
-                ]);
-                $post->author->notifications()->create([
-                    'id' => (string) Str::uuid(),
-                    'type' => 'claim_owner_review',
-                    'data' => [
-                        'title' => 'A claim is ready for your decision',
-                        'body' => 'An administrator approved a claim for '.$post->item_name.'. Confirm whether you agree to hand over the item.',
-                        'claim_id' => $claim->id,
-                        'post_id' => $claim->post_id,
-                        'conversation_id' => $conversation->id,
                     ],
                 ]);
             } else {
                 $claim->update([
                     'status' => 'rejected',
-                    'author_decision' => 'rejected',
                     'reviewed_by' => $request->user('admin')->id,
                     'reviewed_at' => now(),
+                    'review_reason' => $data['reason'],
                 ]);
-                $hasApprovedClaim = $post->claimRequests()
-                    ->where('status', 'approved')
-                    ->whereIn('author_decision', ['pending', 'approved'])
-                    ->exists();
                 $hasPendingClaims = $post->claimRequests()->where('status', 'pending')->exists();
-                $post->update([
-                    'status' => $hasApprovedClaim
-                        ? 'handover_pending'
-                        : ($hasPendingClaims ? 'claim_pending' : 'active'),
-                ]);
+                $post->update(['status' => $hasPendingClaims ? 'claim_pending' : 'active']);
                 $claim->claimant->notifications()->create([
                     'id' => (string) Str::uuid(),
                     'type' => 'claim_rejected',
-                    'data' => ['title' => 'Claim not approved', 'body' => $data['reason']],
+                    'data' => [
+                        'title' => 'Claim not approved',
+                        'body' => $data['reason'],
+                        'claim_id' => $claim->id,
+                        'reason' => $data['reason'],
+                    ],
                 ]);
             }
 

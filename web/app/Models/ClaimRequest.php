@@ -16,8 +16,10 @@ class ClaimRequest extends Model
         'attempt_no',
         'status',
         'author_decision',
+        'author_decision_reason',
         'reviewed_by',
         'reviewed_at',
+        'review_reason',
     ];
 
     protected function casts(): array
