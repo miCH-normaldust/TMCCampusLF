@@ -32,9 +32,9 @@
             <span><small>Lost item posts</small><strong>{{ number_format($lostPosts) }}</strong></span>
             <span class="home-overview-arrow" aria-hidden="true">→</span>
         </a>
-        <a class="home-overview-card proof-overview" href="{{ route('admin.sightings.index') }}">
+        <a class="home-overview-card proof-overview" href="{{ route('admin.sightings.index') }}" title="All lost-item proofs, including pending, approved, and rejected submissions">
             <span class="home-overview-icon" aria-hidden="true">⌕</span>
-            <span><small>Lost item proofs</small><strong>{{ number_format($pendingSightings) }}</strong></span>
+            <span><small>Lost item proofs</small><strong>{{ number_format($lostItemProofs) }}</strong></span>
             <span class="home-overview-arrow" aria-hidden="true">→</span>
         </a>
         <a class="home-overview-card handover-overview" href="{{ route('admin.handovers.index') }}">

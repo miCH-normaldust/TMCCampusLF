@@ -18,14 +18,9 @@ class DashboardController extends Controller
     {
         $admin = Auth::guard('admin')->user();
         $pendingClaims = ClaimRequest::count();
-        $pendingSightings = DB::table('lost_sightings')->where('answer', 'yes')
-            ->where(function ($query): void {
-                $query->where(function ($ownerReview): void {
-                    $ownerReview->where('author_decision', 'pending')->where('admin_decision', 'pending');
-                })->orWhere(function ($adminReview): void {
-                    $adminReview->where('author_decision', 'approved')->where('admin_decision', 'pending');
-                });
-            })->count();
+        $lostItemProofs = DB::table('lost_sightings')
+            ->where('answer', 'yes')
+            ->count();
         $pendingHandovers = DB::table('handovers')
             ->whereNotIn('status', ['completed', 'unsuccessful'])
             ->count();
@@ -49,7 +44,7 @@ class DashboardController extends Controller
 
         return view('admin.dashboard', [
             'pendingClaims' => $pendingClaims,
-            'pendingSightings' => $pendingSightings,
+            'lostItemProofs' => $lostItemProofs,
             'pendingHandovers' => $pendingHandovers,
             'pendingReports' => $pendingReports,
             'pendingFeedback' => $pendingFeedback,

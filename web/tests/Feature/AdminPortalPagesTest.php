@@ -224,6 +224,25 @@ class AdminPortalPagesTest extends TestCase
             'status' => 'approved',
             'author_decision' => 'pending',
         ]);
+        foreach ([
+            ['pending', 'pending'],
+            ['approved', 'approved'],
+            ['rejected', 'rejected'],
+        ] as $index => [$ownerDecision, $adminDecision]) {
+            LostSighting::create([
+                'post_id' => Post::where('type', 'lost')->firstOrFail()->id,
+                'user_id' => $claimant->id,
+                'answer' => 'yes',
+                'evidence_text' => 'Evidence state '.($index + 1),
+                'author_decision' => $ownerDecision,
+                'admin_decision' => $adminDecision,
+            ]);
+        }
+        LostSighting::create([
+            'post_id' => Post::where('type', 'lost')->firstOrFail()->id,
+            'user_id' => $claimant->id,
+            'answer' => 'no',
+        ]);
 
         $this->actingAs($admin, 'admin')
             ->get(route('admin.dashboard'))
@@ -232,7 +251,8 @@ class AdminPortalPagesTest extends TestCase
             ->assertSee(route('admin.community-feed.index', ['type' => 'found']), false)
             ->assertSee('<small>Lost item posts</small><strong>1</strong>', false)
             ->assertSee(route('admin.community-feed.index', ['type' => 'lost']), false)
-            ->assertSee('<small>Found item claims</small><strong>1</strong>', false);
+            ->assertSee('<small>Found item claims</small><strong>1</strong>', false)
+            ->assertSee('<small>Lost item proofs</small><strong>3</strong>', false);
     }
 
     public function test_deleted_report_actions_remain_available_in_report_history(): void
