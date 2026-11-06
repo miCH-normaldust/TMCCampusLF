@@ -637,6 +637,7 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
           captchaToken: _captchaToken,
           captchaAnswer: _captchaAnswer.text.trim(),
         );
+        if (!mounted) return;
         setState(() {
           _otpSent = true;
           _message = message;
@@ -661,6 +662,7 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
     } finally {
       if (mounted) setState(() => _busy = false);
     }
+    if (!mounted) return;
     if (refreshCaptcha) await _loadCaptcha(clearError: false);
   }
 

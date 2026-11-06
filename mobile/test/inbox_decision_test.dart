@@ -95,6 +95,73 @@ void main() {
     },
   );
 
+  testWidgets(
+    'sending a message after leaving the conversation does not use a disposed controller',
+    (tester) async {
+      final api = ApiClient(readToken: () async => null);
+      RequestInterceptorHandler? pendingHandler;
+      RequestOptions? pendingRequest;
+      api.dio.interceptors.add(
+        InterceptorsWrapper(
+          onRequest: (options, handler) {
+            if (options.method == 'POST') {
+              pendingHandler = handler;
+              pendingRequest = options;
+              return;
+            }
+            handler.resolve(
+              Response<Map<String, dynamic>>(
+                requestOptions: options,
+                data: {'data': <dynamic>[]},
+              ),
+            );
+          },
+        ),
+      );
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Builder(
+            builder: (context) => Scaffold(
+              body: TextButton(
+                onPressed: () => Navigator.of(context).push<void>(
+                  MaterialPageRoute<void>(
+                    builder: (_) => ConversationScreen(
+                      api: api,
+                      conversation: {
+                        'id': 31,
+                        'type': 'direct',
+                        'item_name': 'Blue bottle',
+                        'other_user_id': 2,
+                        'other_first_name': 'Sam',
+                      },
+                      onOpenProfile: (_) async {},
+                    ),
+                  ),
+                ),
+                child: const Text('Open conversation'),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.tap(find.text('Open conversation'));
+      await tester.pumpAndSettle();
+      await tester.enterText(find.byType(TextField), 'Hello');
+      await tester.tap(find.byTooltip('Send message'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 100));
+      expect(pendingHandler, isNotNull);
+
+      await tester.pageBack();
+      await tester.pumpAndSettle();
+      pendingHandler!.resolve(Response<void>(requestOptions: pendingRequest!));
+      await tester.pumpAndSettle();
+
+      expect(tester.takeException(), isNull);
+    },
+  );
+
   testWidgets('approved claims can nudge TMC administrators', (tester) async {
     final api = ApiClient(readToken: () async => null);
     final requests = <RequestOptions>[];
@@ -158,6 +225,10 @@ void main() {
     );
     await tester.pumpAndSettle();
     await tester.tap(find.text('List of claims'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Nudge TMC admins'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Cancel'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Nudge TMC admins'));
     await tester.pumpAndSettle();

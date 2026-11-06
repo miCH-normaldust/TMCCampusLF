@@ -576,46 +576,23 @@ class _CampusHomeScreenState extends State<CampusHomeScreen> {
   }
 
   Future<void> _requestPostRetrieved(CampusPost post) async {
-    final reason = TextEditingController();
-    final confirmed = await showDialog<bool>(
+    final reason = await showDialog<String>(
       context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: const Text('Request retrieved status'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Text(
-              'TMC administrators will review your request before this post is marked as retrieved.',
-            ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: reason,
-              maxLines: 3,
-              maxLength: 1000,
-              decoration: const InputDecoration(labelText: 'Optional details'),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(dialogContext, false),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(dialogContext, true),
-            child: const Text('Send request'),
-          ),
-        ],
+      builder: (_) => const _TextEntryDialog(
+        title: 'Request retrieved status',
+        description: 'TMC administrators will review your request before this post is marked as retrieved.',
+        label: 'Optional details',
+        actionLabel: 'Send request',
+        maxLines: 3,
+        maxLength: 1000,
       ),
     );
-    if (confirmed != true) {
-      reason.dispose();
-      return;
-    }
+    if (reason == null) return;
+
     try {
       final response = await widget.api.dio.post<Map<String, dynamic>>(
         '/posts/${post.id}/retrieval-request',
-        data: {'reason': reason.text.trim()},
+        data: {'reason': reason},
       );
       if (mounted) {
         _refreshFeed();
@@ -634,8 +611,6 @@ class _CampusHomeScreenState extends State<CampusHomeScreen> {
           context,
         ).showSnackBar(SnackBar(content: Text(widget.api.errorMessage(error))));
       }
-    } finally {
-      reason.dispose();
     }
   }
 
@@ -1821,41 +1796,23 @@ Future<void> _reportPost(
   ApiClient api,
   CampusPost post,
 ) async {
-  final reason = TextEditingController();
-  try {
-    final accepted = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Report this post'),
-        content: TextField(
-          controller: reason,
-          maxLength: 500,
-          maxLines: 3,
-          decoration: const InputDecoration(labelText: 'Reason'),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text('Send report'),
-          ),
-        ],
-      ),
-    );
-    if (accepted != true || !context.mounted) return;
-    if (reason.text.trim().isEmpty) {
-      ScaffoldMessenger.maybeOf(context)?.showSnackBar(
-        const SnackBar(content: Text('Enter a reason for the report.')),
-      );
-      return;
-    }
+  final reason = await showDialog<String>(
+    context: context,
+    builder: (_) => const _TextEntryDialog(
+      title: 'Report this post',
+      label: 'Reason',
+      actionLabel: 'Send report',
+      maxLength: 500,
+      maxLines: 3,
+      requiredInput: true,
+    ),
+  );
+  if (reason == null || !context.mounted) return;
 
+  try {
     await api.dio.post<void>(
       '/posts/${post.id}/reports',
-      data: {'reason': reason.text.trim()},
+      data: {'reason': reason},
     );
     if (context.mounted) {
       ScaffoldMessenger.maybeOf(context)?.showSnackBar(
@@ -1869,8 +1826,344 @@ Future<void> _reportPost(
       ScaffoldMessenger.maybeOf(context)
           ?.showSnackBar(SnackBar(content: Text(api.errorMessage(error))));
     }
-  } finally {
-    reason.dispose();
+  }
+}
+
+class _TextEntryDialog extends StatefulWidget {
+  const _TextEntryDialog({
+    required this.title,
+    required this.label,
+    required this.actionLabel,
+    this.initialText = '',
+    this.description,
+    this.maxLength,
+    this.maxLines = 1,
+    this.requiredInput = false,
+  });
+
+  final String title;
+  final String label;
+  final String actionLabel;
+  final String initialText;
+  final String? description;
+  final int? maxLength;
+  final int maxLines;
+  final bool requiredInput;
+
+  @override
+  State<_TextEntryDialog> createState() => _TextEntryDialogState();
+}
+
+class _TextEntryDialogState extends State<_TextEntryDialog> {
+  late final TextEditingController _controller;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = TextEditingController(text: widget.initialText);
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      scrollable: true,
+      title: Text(widget.title),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (widget.description != null) ...[
+            Text(widget.description!),
+            const SizedBox(height: 12),
+          ],
+          TextField(
+            controller: _controller,
+            maxLength: widget.maxLength,
+            maxLines: widget.maxLines,
+            onChanged: (_) {
+              if (_error != null) setState(() => _error = null);
+            },
+            decoration: InputDecoration(
+              labelText: widget.label,
+              errorText: _error,
+            ),
+          ),
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          onPressed: () {
+            final value = _controller.text.trim();
+            if (widget.requiredInput && value.isEmpty) {
+              setState(() => _error = 'This field is required.');
+              return;
+            }
+            Navigator.pop(context, value);
+          },
+          child: Text(widget.actionLabel),
+        ),
+      ],
+    );
+  }
+}
+
+class _EditProfileDialog extends StatefulWidget {
+  const _EditProfileDialog({required this.api, required this.profile});
+
+  final ApiClient api;
+  final Map<String, dynamic> profile;
+
+  @override
+  State<_EditProfileDialog> createState() => _EditProfileDialogState();
+}
+
+class _EditProfileDialogState extends State<_EditProfileDialog> {
+  late final TextEditingController _firstName;
+  late final TextEditingController _lastName;
+  late final TextEditingController _profileStatus;
+  late final TextEditingController _bio;
+  late final TextEditingController _currentAddress;
+  late final TextEditingController _permanentAddress;
+  late final TextEditingController _contactNumber;
+  late final TextEditingController _contactEmail;
+  XFile? _picture;
+  bool _saving = false;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    final profile = widget.profile;
+    _firstName = TextEditingController(
+      text: profile['first_name'] as String? ?? '',
+    );
+    _lastName = TextEditingController(
+      text: profile['last_name'] as String? ?? '',
+    );
+    _profileStatus = TextEditingController(
+      text: profile['profile_status'] as String? ?? '',
+    );
+    _bio = TextEditingController(text: profile['bio'] as String? ?? '');
+    _currentAddress = TextEditingController(
+      text: profile['current_address'] as String? ?? '',
+    );
+    _permanentAddress = TextEditingController(
+      text: profile['permanent_address'] as String? ?? '',
+    );
+    _contactNumber = TextEditingController(
+      text: profile['contact_number'] as String? ?? '',
+    );
+    _contactEmail = TextEditingController(
+      text: profile['contact_email'] as String? ?? '',
+    );
+  }
+
+  @override
+  void dispose() {
+    _firstName.dispose();
+    _lastName.dispose();
+    _profileStatus.dispose();
+    _bio.dispose();
+    _currentAddress.dispose();
+    _permanentAddress.dispose();
+    _contactNumber.dispose();
+    _contactEmail.dispose();
+    super.dispose();
+  }
+
+  Future<void> _pickPicture() async {
+    try {
+      final selected = await ImagePicker().pickImage(
+        source: ImageSource.gallery,
+        imageQuality: 85,
+      );
+      if (selected != null && mounted) {
+        setState(() {
+          _picture = selected;
+          _error = null;
+        });
+      }
+    } on PlatformException catch (error) {
+      if (mounted) {
+        setState(
+          () => _error = error.message ?? 'Could not select a profile picture.',
+        );
+      }
+    } on Exception {
+      if (mounted) {
+        setState(() => _error = 'Could not select a profile picture.');
+      }
+    }
+  }
+
+  Future<Response<Map<String, dynamic>>> _uploadProfilePicture(
+    Map<String, dynamic> fields,
+    XFile picture,
+  ) async {
+    final pictureBytes = await picture.readAsBytes();
+    return widget.api.dio.post<Map<String, dynamic>>(
+      '/profile',
+      data: FormData.fromMap({
+        ...fields,
+        'profile_picture': MultipartFile.fromBytes(
+          pictureBytes,
+          filename: picture.name,
+          contentType: MultipartFile.lookupMediaType(picture.name),
+        ),
+      }),
+    );
+  }
+
+  Future<void> _save() async {
+    if (_saving) return;
+    if (_firstName.text.trim().isEmpty || _lastName.text.trim().isEmpty) {
+      setState(() => _error = 'First and last name are required.');
+      return;
+    }
+    setState(() {
+      _saving = true;
+      _error = null;
+    });
+    try {
+      final fields = <String, dynamic>{
+        'first_name': _firstName.text.trim(),
+        'last_name': _lastName.text.trim(),
+        'profile_status': _profileStatus.text.trim(),
+        'bio': _bio.text.trim(),
+        'current_address': _currentAddress.text.trim(),
+        'permanent_address': _permanentAddress.text.trim(),
+        'contact_number': _contactNumber.text.trim(),
+        'contact_email': _contactEmail.text.trim(),
+      };
+      final picture = _picture;
+      final response = picture == null
+          ? await widget.api.dio.put<Map<String, dynamic>>(
+              '/profile',
+              data: fields,
+            )
+          : await _uploadProfilePicture(fields, picture);
+      if (mounted) Navigator.pop(context, response.data);
+    } on DioException catch (error) {
+      if (mounted) {
+        setState(() => _error = widget.api.errorMessage(error));
+      }
+    } on Exception {
+      if (mounted) {
+        setState(
+          () => _error =
+              'Could not read the selected picture. Choose it again and retry.',
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      scrollable: true,
+      title: const Text('Edit profile'),
+      content: SizedBox(
+        width: 460,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (_error != null)
+              Align(
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  _error!,
+                  style: TextStyle(color: Theme.of(context).colorScheme.error),
+                ),
+              ),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: Text(
+                  'Profile details you add here are visible to other campus members.',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
+                ),
+              ),
+            ),
+            TextField(
+              controller: _firstName,
+              decoration: const InputDecoration(labelText: 'First name *'),
+            ),
+            TextField(
+              controller: _lastName,
+              decoration: const InputDecoration(labelText: 'Last name *'),
+            ),
+            TextField(
+              controller: _profileStatus,
+              maxLength: 100,
+              decoration: const InputDecoration(labelText: 'Status'),
+            ),
+            TextField(
+              controller: _bio,
+              maxLines: 3,
+              maxLength: 500,
+              decoration: const InputDecoration(labelText: 'Bio'),
+            ),
+            TextField(
+              controller: _currentAddress,
+              decoration: const InputDecoration(labelText: 'Current address'),
+            ),
+            TextField(
+              controller: _permanentAddress,
+              decoration: const InputDecoration(labelText: 'Permanent address'),
+            ),
+            TextField(
+              controller: _contactNumber,
+              keyboardType: TextInputType.phone,
+              decoration: const InputDecoration(labelText: 'Mobile number'),
+            ),
+            TextField(
+              controller: _contactEmail,
+              keyboardType: TextInputType.emailAddress,
+              decoration: const InputDecoration(labelText: 'Contact email'),
+            ),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: TextButton.icon(
+                onPressed: _saving ? null : _pickPicture,
+                icon: const Icon(Icons.add_a_photo_outlined),
+                label: Text(_picture?.name ?? 'Add or change profile picture'),
+              ),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: _saving ? null : () => Navigator.pop(context),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          onPressed: _saving ? null : _save,
+          child: _saving
+              ? const SizedBox.square(
+                  dimension: 18,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              : const Text('Save'),
+        ),
+      ],
+    );
   }
 }
 
@@ -2220,34 +2513,49 @@ class _PostDetailSheetState extends State<_PostDetailSheet> {
   }
 
   Future<void> _pickClaimPhotos() async {
-    final photos = await ImagePicker().pickMultiImage(
-      imageQuality: 85,
-      maxWidth: 1600,
-      maxHeight: 1600,
-    );
-    if (!mounted || photos.isEmpty) return;
-    if (photos.length > 5) {
-      setState(() => _claimFeedback = 'Choose no more than five photos.');
-      return;
-    }
-    for (final photo in photos) {
-      if (await photo.length() > 5 * 1024 * 1024) {
-        if (!mounted) return;
-        setState(() {
-          _claimFeedback =
-              '${photo.name} is larger than 5 MB. Choose a smaller photo.';
-        });
+    try {
+      final photos = await ImagePicker().pickMultiImage(
+        imageQuality: 85,
+        maxWidth: 1600,
+        maxHeight: 1600,
+      );
+      if (!mounted || photos.isEmpty) return;
+      if (photos.length > 5) {
+        setState(() => _claimFeedback = 'Choose no more than five photos.');
         return;
       }
+      for (final photo in photos) {
+        if (await photo.length() > 5 * 1024 * 1024) {
+          if (!mounted) return;
+          setState(() {
+            _claimFeedback =
+                '${photo.name} is larger than 5 MB. Choose a smaller photo.';
+          });
+          return;
+        }
+      }
+      if (!mounted) return;
+      setState(() {
+        _claimPhotos
+          ..clear()
+          ..addAll(photos);
+        _claimFeedback = null;
+        _message = null;
+      });
+    } on PlatformException catch (error) {
+      if (mounted) {
+        setState(
+          () => _claimFeedback =
+              error.message ?? 'Could not select claim evidence photos.',
+        );
+      }
+    } on Exception {
+      if (mounted) {
+        setState(
+          () => _claimFeedback = 'Could not select claim evidence photos.',
+        );
+      }
     }
-    if (!mounted) return;
-    setState(() {
-      _claimPhotos
-        ..clear()
-        ..addAll(photos);
-      _claimFeedback = null;
-      _message = null;
-    });
   }
 
   Future<FormData> _claimFormData({bool patch = false}) async {
@@ -2356,6 +2664,7 @@ class _PostDetailSheetState extends State<_PostDetailSheet> {
         '/posts/${widget.post.id}/comments',
         data: {'body': body, if (_replyToId != null) 'parent_id': _replyToId},
       );
+      if (!mounted) return;
       _comment.clear();
       setState(() {
         _replyToId = null;
@@ -2873,11 +3182,23 @@ class _SightingEvidenceSheetState extends State<SightingEvidenceSheet> {
   }
 
   Future<void> _pickPhoto() async {
-    final photo = await ImagePicker().pickImage(
-      source: ImageSource.gallery,
-      imageQuality: 85,
-    );
-    if (photo != null && mounted) setState(() => _photo = photo);
+    try {
+      final photo = await ImagePicker().pickImage(
+        source: ImageSource.gallery,
+        imageQuality: 85,
+      );
+      if (photo != null && mounted) setState(() => _photo = photo);
+    } on PlatformException catch (error) {
+      if (mounted) {
+        setState(
+          () => _error = error.message ?? 'Could not select an evidence photo.',
+        );
+      }
+    } on Exception {
+      if (mounted) {
+        setState(() => _error = 'Could not select an evidence photo.');
+      }
+    }
   }
 
   Future<void> _submit() async {
@@ -3415,36 +3736,46 @@ class _CreatePostScreenState extends State<CreatePostScreen> {
       firstDate: DateTime.now().subtract(const Duration(days: 365)),
       lastDate: DateTime.now(),
     );
-    if (date != null) setState(() => _eventDate = date);
+    if (date != null && mounted) setState(() => _eventDate = date);
   }
 
   Future<void> _pickPhotos() async {
-    final selected = await ImagePicker().pickMultiImage(imageQuality: 85);
-    if (selected.isEmpty || !mounted) return;
-    final remaining = 5 - _photos.length;
-    if (remaining <= 0) {
-      setState(() => _error = 'A post can include at most five photos.');
-      return;
-    }
-    final selectedCategory = _categories.where(
-      (item) => item['id'] == _categoryId,
-    );
-    final category = selectedCategory.isEmpty
-        ? null
-        : selectedCategory.first['name'] as String;
-    final altText = [
-      _name.text.trim(),
-      category,
-    ].whereType<String>().where((text) => text.isNotEmpty).join(', ');
-    setState(() {
-      for (final photo in selected.take(remaining)) {
-        _photos.add(photo);
-        _altTextControllers.add(TextEditingController(text: altText));
+    try {
+      final selected = await ImagePicker().pickMultiImage(imageQuality: 85);
+      if (selected.isEmpty || !mounted) return;
+      final remaining = 5 - _photos.length;
+      if (remaining <= 0) {
+        setState(() => _error = 'A post can include at most five photos.');
+        return;
       }
-      _error = selected.length > remaining
-          ? 'Only the first five selected photos were added.'
-          : null;
-    });
+      final selectedCategory = _categories.where(
+        (item) => item['id'] == _categoryId,
+      );
+      final category = selectedCategory.isEmpty
+          ? null
+          : selectedCategory.first['name'] as String;
+      final altText = [
+        _name.text.trim(),
+        category,
+      ].whereType<String>().where((text) => text.isNotEmpty).join(', ');
+      setState(() {
+        for (final photo in selected.take(remaining)) {
+          _photos.add(photo);
+          _altTextControllers.add(TextEditingController(text: altText));
+        }
+        _error = selected.length > remaining
+            ? 'Only the first five selected photos were added.'
+            : null;
+      });
+    } on PlatformException catch (error) {
+      if (mounted) {
+        setState(
+          () => _error = error.message ?? 'Could not select post photos.',
+        );
+      }
+    } on Exception {
+      if (mounted) setState(() => _error = 'Could not select post photos.');
+    }
   }
 
   void _removePhoto(int index) {
@@ -4581,34 +4912,21 @@ class _InboxScreenState extends State<InboxScreen> {
   }
 
   Future<void> _messageAdminAboutEvidence(Map<String, dynamic> evidence) async {
-    final message = TextEditingController(
-      text:
-          'Please review the evidence for ${evidence['item_name'] ?? 'my lost item'}. I believe it is valid.',
-    );
     try {
       final body = await showDialog<String>(
         context: context,
-        builder: (context) => AlertDialog(
-          title: const Text('Message TMC administrators'),
-          content: TextField(
-            controller: message,
-            maxLines: 4,
-            maxLength: 2000,
-            decoration: const InputDecoration(labelText: 'Message'),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('Cancel'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.pop(context, message.text.trim()),
-              child: const Text('Open chat'),
-            ),
-          ],
+        builder: (_) => _TextEntryDialog(
+          title: 'Message TMC administrators',
+          initialText:
+              'Please review the evidence for ${evidence['item_name'] ?? 'my lost item'}. I believe it is valid.',
+          label: 'Message',
+          actionLabel: 'Open chat',
+          maxLines: 4,
+          maxLength: 2000,
+          requiredInput: true,
         ),
       );
-      if (body == null || body.isEmpty || !mounted) return;
+      if (body == null || !mounted) return;
       final response = await widget.api.dio.post<Map<String, dynamic>>(
         '/sightings/${evidence['id']}/admin-conversation',
         data: {'body': body},
@@ -4636,40 +4954,25 @@ class _InboxScreenState extends State<InboxScreen> {
           context,
         ).showSnackBar(SnackBar(content: Text(widget.api.errorMessage(error))));
       }
-    } finally {
-      message.dispose();
     }
   }
 
   Future<void> _messageAdminAboutClaim(Map<String, dynamic> claim) async {
-    final message = TextEditingController(
-      text:
-          'Please review the claim for ${claim['item_name'] ?? 'my found item'}. I approved it and believe it is ready for handover.',
-    );
     try {
       final body = await showDialog<String>(
         context: context,
-        builder: (context) => AlertDialog(
-          title: const Text('Message TMC administrators'),
-          content: TextField(
-            controller: message,
-            maxLines: 4,
-            maxLength: 2000,
-            decoration: const InputDecoration(labelText: 'Message'),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('Cancel'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.pop(context, message.text.trim()),
-              child: const Text('Open chat'),
-            ),
-          ],
+        builder: (_) => _TextEntryDialog(
+          title: 'Message TMC administrators',
+          initialText:
+              'Please review the claim for ${claim['item_name'] ?? 'my found item'}. I approved it and believe it is ready for handover.',
+          label: 'Message',
+          actionLabel: 'Open chat',
+          maxLines: 4,
+          maxLength: 2000,
+          requiredInput: true,
         ),
       );
-      if (body == null || body.isEmpty || !mounted) return;
+      if (body == null || !mounted) return;
       final response = await widget.api.dio.post<Map<String, dynamic>>(
         '/claims/${claim['id']}/admin-conversation',
         data: {'body': body},
@@ -4697,8 +5000,6 @@ class _InboxScreenState extends State<InboxScreen> {
           context,
         ).showSnackBar(SnackBar(content: Text(widget.api.errorMessage(error))));
       }
-    } finally {
-      message.dispose();
     }
   }
 
@@ -6026,6 +6327,7 @@ class _ConversationScreenState extends State<ConversationScreen> {
         '/conversations/$_conversationId/messages',
         data: {'body': body},
       );
+      if (!mounted) return;
       _message.clear();
       setState(() {
         _messages = _loadMessages();
@@ -6879,238 +7181,17 @@ class _ProfileScreenState extends State<ProfileScreen> {
     if (mounted) _loadMyPosts();
   }
 
-  Future<Response<Map<String, dynamic>>> _uploadProfilePicture(
-    Map<String, dynamic> fields,
-    XFile picture,
-  ) async {
-    final pictureBytes = await picture.readAsBytes();
-    return widget.api.dio.post<Map<String, dynamic>>(
-      '/profile',
-      data: FormData.fromMap({
-        ...fields,
-        'profile_picture': MultipartFile.fromBytes(
-          pictureBytes,
-          filename: picture.name,
-          contentType: MultipartFile.lookupMediaType(picture.name),
-        ),
-      }),
-    );
-  }
-
   Future<void> _editProfile() async {
-    final profile = _profile ?? const <String, dynamic>{};
-    final firstName = TextEditingController(
-      text: profile['first_name'] as String? ?? '',
-    );
-    final lastName = TextEditingController(
-      text: profile['last_name'] as String? ?? '',
-    );
-    final profileStatus = TextEditingController(
-      text: profile['profile_status'] as String? ?? '',
-    );
-    final bio = TextEditingController(text: profile['bio'] as String? ?? '');
-    final currentAddress = TextEditingController(
-      text: profile['current_address'] as String? ?? '',
-    );
-    final permanentAddress = TextEditingController(
-      text: profile['permanent_address'] as String? ?? '',
-    );
-    final contactNumber = TextEditingController(
-      text: profile['contact_number'] as String? ?? '',
-    );
-    final contactEmail = TextEditingController(
-      text: profile['contact_email'] as String? ?? '',
-    );
-    XFile? picture;
-    var saving = false;
-    var profileSaved = false;
-    String? error;
-
     final updatedProfile = await showDialog<Map<String, dynamic>>(
       context: context,
-      builder: (dialogContext) => StatefulBuilder(
-        builder: (context, setDialogState) => AlertDialog(
-          title: const Text('Edit profile'),
-          content: SizedBox(
-            width: 460,
-            child: SingleChildScrollView(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  if (error != null)
-                    Align(
-                      alignment: Alignment.centerLeft,
-                      child: Text(
-                        error!,
-                        style: TextStyle(
-                          color: Theme.of(context).colorScheme.error,
-                        ),
-                      ),
-                    ),
-                  Align(
-                    alignment: Alignment.centerLeft,
-                    child: Padding(
-                      padding: EdgeInsets.only(bottom: 8),
-                      child: Text(
-                        'Profile details you add here are visible to other campus members.',
-                        style: TextStyle(
-                          fontSize: 12,
-                          color: Theme.of(context).colorScheme.onSurfaceVariant,
-                        ),
-                      ),
-                    ),
-                  ),
-                  TextField(
-                    controller: firstName,
-                    decoration: const InputDecoration(
-                      labelText: 'First name *',
-                    ),
-                  ),
-                  TextField(
-                    controller: lastName,
-                    decoration: const InputDecoration(labelText: 'Last name *'),
-                  ),
-                  TextField(
-                    controller: profileStatus,
-                    maxLength: 100,
-                    decoration: const InputDecoration(labelText: 'Status'),
-                  ),
-                  TextField(
-                    controller: bio,
-                    maxLines: 3,
-                    maxLength: 500,
-                    decoration: const InputDecoration(labelText: 'Bio'),
-                  ),
-                  TextField(
-                    controller: currentAddress,
-                    decoration: const InputDecoration(
-                      labelText: 'Current address',
-                    ),
-                  ),
-                  TextField(
-                    controller: permanentAddress,
-                    decoration: const InputDecoration(
-                      labelText: 'Permanent address',
-                    ),
-                  ),
-                  TextField(
-                    controller: contactNumber,
-                    keyboardType: TextInputType.phone,
-                    decoration: const InputDecoration(
-                      labelText: 'Mobile number',
-                    ),
-                  ),
-                  TextField(
-                    controller: contactEmail,
-                    keyboardType: TextInputType.emailAddress,
-                    decoration: const InputDecoration(
-                      labelText: 'Contact email',
-                    ),
-                  ),
-                  Align(
-                    alignment: Alignment.centerLeft,
-                    child: TextButton.icon(
-                      onPressed: saving
-                          ? null
-                          : () async {
-                              final selected = await ImagePicker().pickImage(
-                                source: ImageSource.gallery,
-                                imageQuality: 85,
-                              );
-                              if (selected != null && dialogContext.mounted) {
-                                setDialogState(() => picture = selected);
-                              }
-                            },
-                      icon: const Icon(Icons.add_a_photo_outlined),
-                      label: Text(
-                        picture?.name ?? 'Add or change profile picture',
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: saving ? null : () => Navigator.pop(dialogContext),
-              child: const Text('Cancel'),
-            ),
-            FilledButton(
-              onPressed: saving
-                  ? null
-                  : () async {
-                      if (firstName.text.trim().isEmpty ||
-                          lastName.text.trim().isEmpty) {
-                        setDialogState(
-                          () => error = 'First and last name are required.',
-                        );
-                        return;
-                      }
-                      setDialogState(() {
-                        saving = true;
-                        error = null;
-                      });
-                      try {
-                        final fields = <String, dynamic>{
-                          'first_name': firstName.text.trim(),
-                          'last_name': lastName.text.trim(),
-                          'profile_status': profileStatus.text.trim(),
-                          'bio': bio.text.trim(),
-                          'current_address': currentAddress.text.trim(),
-                          'permanent_address': permanentAddress.text.trim(),
-                          'contact_number': contactNumber.text.trim(),
-                          'contact_email': contactEmail.text.trim(),
-                        };
-                        final response = picture == null
-                            ? await widget.api.dio.put<Map<String, dynamic>>(
-                                '/profile',
-                                data: fields,
-                              )
-                            : await _uploadProfilePicture(fields, picture!);
-                        if (!mounted || !dialogContext.mounted) return;
-                        profileSaved = true;
-                        Navigator.pop(dialogContext, response.data);
-                      } on DioException catch (exception) {
-                        if (dialogContext.mounted) {
-                          setDialogState(
-                            () => error = widget.api.errorMessage(exception),
-                          );
-                        }
-                      } on Exception {
-                        if (dialogContext.mounted) {
-                          setDialogState(
-                            () => error = 'Could not read the selected picture. Choose it again and retry.',
-                          );
-                        }
-                      } finally {
-                        if (!profileSaved && dialogContext.mounted) {
-                          setDialogState(() => saving = false);
-                        }
-                      }
-                    },
-              child: saving
-                  ? const SizedBox.square(
-                      dimension: 18,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    )
-                  : const Text('Save'),
-            ),
-          ],
-        ),
+      builder: (_) => _EditProfileDialog(
+        api: widget.api,
+        profile: _profile ?? const <String, dynamic>{},
       ),
     );
     if (updatedProfile != null && mounted) {
       setState(() => _profile = updatedProfile);
     }
-    firstName.dispose();
-    lastName.dispose();
-    profileStatus.dispose();
-    bio.dispose();
-    currentAddress.dispose();
-    permanentAddress.dispose();
-    contactNumber.dispose();
-    contactEmail.dispose();
   }
 
   Future<void> _sendFeedback() async {
