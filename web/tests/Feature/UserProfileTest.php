@@ -251,7 +251,9 @@ class UserProfileTest extends TestCase
         $older->forceFill(['created_at' => now()->subDay()])->save();
         $newer = $this->createPost($user, $category, $location, 'active', 'Newer item');
         $pending = $this->createPost($user, $category, $location, 'handover_pending', 'Pending item');
-        $this->getJson('/api/v1/posts')->assertUnauthorized();
+        $this->get('/api/v1/posts')
+            ->assertUnauthorized()
+            ->assertJsonStructure(['message']);
         Sanctum::actingAs($user);
 
         $this->getJson('/api/v1/posts?status=active&category_id='.$category->id.'&sort=oldest')

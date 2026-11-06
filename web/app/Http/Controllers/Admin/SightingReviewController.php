@@ -157,6 +157,9 @@ class SightingReviewController extends Controller
                         'body' => $data['reason'],
                         'sighting_id' => $sighting->id,
                         'post_id' => $sighting->post_id,
+                        'recipient_role' => $recipient->id === $post->user_id
+                            ? 'post_owner'
+                            : 'finder',
                         'conversation_id' => $conversation?->id,
                     ],
                 ]);

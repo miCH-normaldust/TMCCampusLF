@@ -238,6 +238,16 @@ class ClaimController extends Controller
 
     public function awaitingPostAuthor(Request $request): JsonResponse
     {
+        return $this->postAuthorClaims($request, true);
+    }
+
+    public function receivedClaims(Request $request): JsonResponse
+    {
+        return $this->postAuthorClaims($request, false);
+    }
+
+    private function postAuthorClaims(Request $request, bool $awaitingDecision): JsonResponse
+    {
         $claims = ClaimRequest::with([
             'post:id,item_name,type,category_id',
             'post.category:id,name',
@@ -245,7 +255,7 @@ class ClaimController extends Controller
             'claimant:id,first_name,last_name',
             'evidenceImages',
         ])
-            ->whereIn('status', ['pending', 'rejected'])
+            ->when($awaitingDecision, fn ($query) => $query->whereIn('status', ['pending', 'rejected']))
             ->whereHas('post', fn ($post) => $post->where('user_id', $request->user()->id))
             ->latest()
             ->paginate(20)
@@ -289,6 +299,37 @@ class ClaimController extends Controller
                 'evidence_images' => $claim->evidenceImages
                     ->map(fn ($image): string => \App\Support\PublicMediaUrl::forPath($image->path))
                     ->all(),
+            ]);
+
+        return response()->json($claims);
+    }
+
+    public function myClaims(Request $request): JsonResponse
+    {
+        $claims = ClaimRequest::with([
+            'post:id,item_name,type,user_id',
+            'post.author:id,first_name,last_name',
+            'evidenceImages',
+            'handover:id,claim_id,status',
+        ])
+            ->where('claimant_id', $request->user()->id)
+            ->latest()
+            ->paginate(25)
+            ->through(fn (ClaimRequest $claim): array => [
+                'id' => $claim->id,
+                'post_id' => $claim->post_id,
+                'item_name' => $claim->post->item_name,
+                'attempt_no' => $claim->attempt_no,
+                'status' => $claim->status,
+                'author_decision' => $claim->author_decision,
+                'author_decision_reason' => $claim->author_decision_reason,
+                'review_reason' => $claim->review_reason,
+                'answers' => $claim->answers,
+                'evidence_images' => $claim->evidenceImages
+                    ->map(fn ($image): string => \App\Support\PublicMediaUrl::forPath($image->path))
+                    ->all(),
+                'handover_status' => $claim->handover?->status,
+                'created_at' => $claim->created_at,
             ]);
 
         return response()->json($claims);

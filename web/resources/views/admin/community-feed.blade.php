@@ -9,9 +9,9 @@
             <h1>Community Feed</h1>
             <p>Recent campus posts and community members, together in one place.</p>
         </div>
-        <span class="community-heading-icon campuslf-brand-mark" aria-hidden="true">
-            <span class="brand-lf">LF</span>
-            <img src="{{ asset('images/tmc-logo.png') }}" alt="">
+        <span class="community-heading-icon brand-emblems" aria-hidden="true">
+            <img class="tmc-brand-logo" src="{{ asset('images/tmc-logo.png') }}" alt="">
+            <img class="campuslf-brand-logo" src="{{ asset('images/campuslf-logo.png') }}" alt="">
         </span>
     </section>
 

@@ -10,12 +10,14 @@ void main() {
     expect(light.brightness, Brightness.light);
     expect(light.appBarTheme.backgroundColor, CampusTheme.header);
     expect(dark.brightness, Brightness.dark);
-    expect(dark.appBarTheme.backgroundColor, const Color(0xFF263B50));
+    expect(dark.appBarTheme.backgroundColor, const Color(0xFF10134C));
+    expect(light.textTheme.bodyMedium?.fontFamily, 'Georgia');
+    expect(dark.textTheme.bodyMedium?.fontFamily, 'Georgia');
   });
 
   test('lost and found surfaces use warm and cool palette colors', () {
-    expect(CampusTheme.lostSurface, const Color(0xFFF9E1E2));
-    expect(CampusTheme.foundSurface, const Color(0xFFC0E4EC));
-    expect(CampusTheme.otherSurface, const Color(0xFFD3EFDD));
+    expect(CampusTheme.lostSurface, const Color(0xFFF4E2F2));
+    expect(CampusTheme.foundSurface, const Color(0xFFD8F1F5));
+    expect(CampusTheme.otherSurface, const Color(0xFFE0E7FC));
   });
 }

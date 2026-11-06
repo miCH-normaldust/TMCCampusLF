@@ -22,6 +22,10 @@ return Application::configure(basePath: dirname(__DIR__))
         ]);
     })
     ->withExceptions(function (Exceptions $exceptions): void {
+        $exceptions->shouldRenderJsonWhen(
+            fn (Request $request, Throwable $exception): bool => $request->is('api/*') || $request->expectsJson(),
+        );
+
         $exceptions->render(function (HttpException $exception, Request $request) {
             if ($exception->getStatusCode() !== 419 || ! $request->is('admin/*')) {
                 return null;

@@ -672,7 +672,7 @@ class LostItemHandoverTest extends TestCase
         $this->assertSame('awaiting_schedule', $handover->status);
     }
 
-    public function test_reschedule_attempt_limit_marks_handover_unsuccessful_and_reopens_post(): void
+    public function test_rejected_reschedule_preserves_schedule_and_allows_configured_attempts(): void
     {
         \Illuminate\Support\Facades\DB::table('settings')->updateOrInsert(
             ['key' => 'handover_reschedule_attempts'],
@@ -701,15 +701,16 @@ class LostItemHandoverTest extends TestCase
             'name' => 'Security Office',
             'is_active' => true,
         ]);
+        $originalScheduledAt = now()->addDays(3)->setTime(10, 0);
         $handover = Handover::create([
             'sighting_id' => $sighting->id,
             'status' => 'scheduled',
             'admin_approved_at' => now(),
             'owner_confirmed_at' => now(),
             'finder_confirmed_at' => now(),
-            'scheduled_at' => now()->addDays(3),
+            'scheduled_at' => $originalScheduledAt,
             'location_id' => $meetupLocation->id,
-            'expires_at' => now()->addDays(3)->endOfDay(),
+            'expires_at' => $originalScheduledAt,
         ]);
         $requestedDate = now()->addDays(5)->toDateString();
 
@@ -747,25 +748,61 @@ class LostItemHandoverTest extends TestCase
                 'reason' => 'Please attend the original date.',
             ])->assertRedirect();
 
+        $this->assertDatabaseHas('handovers', [
+            'id' => $handover->id,
+            'status' => 'scheduled',
+            'reschedule_attempts' => 1,
+            'scheduled_at' => $originalScheduledAt->toDateTimeString(),
+            'location_id' => $meetupLocation->id,
+            'expires_at' => $originalScheduledAt->toDateTimeString(),
+        ]);
+        $this->assertDatabaseHas('posts', [
+            'id' => $post->id,
+            'status' => 'handover_pending',
+        ]);
+
         Sanctum::actingAs($owner);
         $this->postJson("/api/v1/handovers/{$handover->id}/reschedule", [
             'requested_date' => now()->addDays(6)->toDateString(),
             'reason' => 'I still cannot attend.',
         ])->assertCreated()
-            ->assertJsonPath('status', 'unsuccessful');
+            ->assertJsonPath('status', 'reschedule_requested')
+            ->assertJsonPath('attempts_used', 2)
+            ->assertJsonPath('attempt_limit', 2);
+
+        $this->actingAs($admin, 'admin')
+            ->post(route('admin.handovers.reschedule', $handover), [
+                'decision' => 'reject',
+                'reason' => 'The original date remains available.',
+            ])->assertRedirect();
 
         $this->assertDatabaseHas('handovers', [
             'id' => $handover->id,
-            'status' => 'unsuccessful',
+            'status' => 'scheduled',
             'reschedule_attempts' => 2,
+            'scheduled_at' => $originalScheduledAt->toDateTimeString(),
+            'location_id' => $meetupLocation->id,
+            'expires_at' => $originalScheduledAt->toDateTimeString(),
+            'requested_date' => null,
+            'reschedule_reason' => null,
         ]);
-        $this->assertDatabaseHas('posts', ['id' => $post->id, 'status' => 'active']);
+        $this->assertDatabaseHas('posts', [
+            'id' => $post->id,
+            'status' => 'handover_pending',
+        ]);
 
-        $this->actingAs($admin, 'admin')
-            ->get(route('admin.handovers.history'))
-            ->assertOk()
-            ->assertSee('Blue notebook')
-            ->assertSee('Unsuccessful');
+        Sanctum::actingAs($owner);
+        $this->postJson("/api/v1/handovers/{$handover->id}/reschedule", [
+            'requested_date' => now()->addDays(7)->toDateString(),
+            'reason' => 'I cannot attend any of the earlier dates.',
+        ])->assertStatus(429)
+            ->assertJsonPath('message', 'You have used all 2 reschedule attempts for this handover.');
+        $this->assertDatabaseHas('handovers', [
+            'id' => $handover->id,
+            'status' => 'scheduled',
+            'reschedule_attempts' => 2,
+            'scheduled_at' => $originalScheduledAt->toDateTimeString(),
+        ]);
     }
 
     public function test_scheduled_handover_expires_at_its_scheduled_time(): void

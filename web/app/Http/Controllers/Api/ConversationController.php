@@ -466,6 +466,12 @@ class ConversationController extends Controller
                         ->value('value') ?: 2,
                     'requested_date' => $handover->requested_date?->toDateString(),
                     'reschedule_reason' => $handover->reschedule_reason,
+                    'failure_reason' => $handover->failure_reason,
+                    'completed_at' => $handover->completed_at,
+                    'unsuccessful_at' => $handover->unsuccessful_at,
+                    'history_at' => $handover->completed_at
+                        ?? $handover->unsuccessful_at
+                        ?? $handover->created_at,
                 ];
             });
 
@@ -610,36 +616,31 @@ class ConversationController extends Controller
             'reason' => ['required', 'string', 'max:1000'],
         ]);
         $limit = (int) DB::table('settings')->where('key', 'handover_reschedule_attempts')->value('value') ?: 2;
-        $failed = DB::transaction(function () use ($request, $handover, $data, $limit, $masker, $ownerId, $finderId): bool {
+        $attempts = DB::transaction(function () use ($request, $handover, $data, $limit, $masker, $ownerId, $finderId): int {
             $locked = Handover::whereKey($handover->id)->lockForUpdate()->firstOrFail();
             abort_unless($locked->status === 'scheduled', 409, 'This handover is no longer scheduled.');
+            abort_if(
+                $locked->reschedule_attempts >= $limit,
+                429,
+                "You have used all {$limit} reschedule attempts for this handover.",
+            );
             $attempts = $locked->reschedule_attempts + 1;
-            $exhausted = $attempts >= $limit;
             $locked->update([
                 'reschedule_attempts' => $attempts,
-                'status' => $exhausted ? 'unsuccessful' : 'reschedule_requested',
+                'status' => 'reschedule_requested',
                 'reschedule_requested_at' => now(),
                 'requested_date' => $data['requested_date'],
                 'reschedule_reason' => $masker->mask($data['reason']),
-                'unsuccessful_at' => $exhausted ? now() : null,
-                'failure_reason' => $exhausted
-                    ? 'The reschedule attempt limit was reached.'
-                    : null,
             ]);
-            if ($exhausted) {
-                ($locked->claimRequest?->post ?? $locked->sighting?->post)?->update(['status' => 'active']);
-            }
 
             $participants = User::whereIn('id', [$ownerId, $finderId])->get();
             foreach ($participants as $participant) {
                 $participant->notifications()->create([
                     'id' => (string) Str::uuid(),
-                    'type' => $exhausted ? 'handover_unsuccessful' : 'handover_reschedule_requested',
+                    'type' => 'handover_reschedule_requested',
                     'data' => [
-                        'title' => $exhausted ? 'Handover ended' : 'Reschedule request sent',
-                        'body' => $exhausted
-                            ? 'The handover could not be rescheduled within the allowed attempts. The item is active again.'
-                            : 'A reschedule request was sent to TMC administrators.',
+                        'title' => 'Reschedule request sent',
+                        'body' => 'A reschedule request was sent to TMC administrators.',
                         'handover_id' => $locked->id,
                     ],
                 ]);
@@ -647,23 +648,23 @@ class ConversationController extends Controller
             foreach (User::where('role', 'admin')->where('status', 'active')->get() as $admin) {
                 $admin->notifications()->create([
                     'id' => (string) Str::uuid(),
-                    'type' => $exhausted ? 'handover_unsuccessful' : 'handover_reschedule_requested',
+                    'type' => 'handover_reschedule_requested',
                     'data' => [
-                        'title' => $exhausted ? 'Handover attempt limit reached' : 'Handover reschedule requested',
+                        'title' => 'Handover reschedule requested',
                         'body' => $data['reason'],
                         'handover_id' => $locked->id,
                     ],
                 ]);
             }
 
-            return $exhausted;
+            return $attempts;
         });
 
         return response()->json([
-            'message' => $failed
-                ? 'The reschedule limit was reached. This handover is unsuccessful and the post is active again.'
-                : 'Your reschedule request was sent to TMC administrators.',
-            'status' => $failed ? 'unsuccessful' : 'reschedule_requested',
+            'message' => 'Your reschedule request was sent to TMC administrators.',
+            'status' => 'reschedule_requested',
+            'attempts_used' => $attempts,
+            'attempt_limit' => $limit,
         ], 201);
     }
 

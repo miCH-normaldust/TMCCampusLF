@@ -47,6 +47,11 @@ class ClaimRequest extends Model
         return $this->hasOne(Conversation::class, 'claim_id');
     }
 
+    public function handover(): HasOne
+    {
+        return $this->hasOne(Handover::class, 'claim_id');
+    }
+
     public function evidenceImages(): HasMany
     {
         return $this->hasMany(ClaimEvidenceImage::class, 'claim_id');

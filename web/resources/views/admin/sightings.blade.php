@@ -53,6 +53,9 @@
                             @endif
                         </p>
                         <p class="proof-text">{{ $sighting->evidence_text }}</p>
+                        @if ($sighting->author_decision_reason)
+                            <p><strong>Owner's decision reason:</strong> {{ $sighting->author_decision_reason }}</p>
+                        @endif
                         @if ($sighting->evidence_image)
                             @include('admin.partials.proof-image', [
                                 'sighting' => $sighting,
@@ -70,7 +73,7 @@
                                 <button class="button danger" name="decision" value="reject" type="submit" onclick="return confirm('Reject this evidence?')">Reject</button>
                             </form>
                         @elseif ($sighting->admin_reason)
-                            <p class="muted">Decision reason: {{ $sighting->admin_reason }}</p>
+                            <p class="muted"><strong>Administrator's decision reason:</strong> {{ $sighting->admin_reason }}</p>
                         @endif
                     </div>
                 @endforeach

@@ -40,8 +40,11 @@ Route::prefix('v1')->group(function (): void {
         Route::put('/profile', [AuthController::class, 'updateProfile']);
         Route::post('/profile', [AuthController::class, 'updateProfile']);
         Route::get('/my-posts', [PostController::class, 'mine']);
+        Route::get('/retrieval-history', [PostRetrievalRequestController::class, 'history']);
         Route::get('/my-posts/{post}/edit-data', [PostController::class, 'editData']);
         Route::get('/my-evidence', [InteractionController::class, 'myEvidence']);
+        Route::get('/received-evidence', [InteractionController::class, 'receivedEvidence']);
+        Route::get('/my-sightings', [InteractionController::class, 'mySightings']);
         Route::put('/password', [AuthController::class, 'changePassword']);
         Route::post('/device-token', [DeviceTokenController::class, 'store']);
         Route::delete('/device-token', [DeviceTokenController::class, 'destroy']);
@@ -57,6 +60,8 @@ Route::prefix('v1')->group(function (): void {
         Route::get('/posts/{post}/my-claim', [ClaimController::class, 'myClaim']);
         Route::get('/posts/{post}/my-sighting', [InteractionController::class, 'mySighting']);
         Route::get('/claims/awaiting-post-author', [ClaimController::class, 'awaitingPostAuthor']);
+        Route::get('/received-claims', [ClaimController::class, 'receivedClaims']);
+        Route::get('/my-claims', [ClaimController::class, 'myClaims']);
         Route::patch('/claims/{claim}/post-author-decision', [ClaimController::class, 'decideForPostAuthor']);
         Route::patch('/claims/{claim}/post-author-decision/undo', [ClaimController::class, 'undoPostAuthorDecision']);
         Route::post('/claims/{claim}/admin-conversation', [ConversationController::class, 'startAdminClaimChat'])->middleware('throttle:10,1');

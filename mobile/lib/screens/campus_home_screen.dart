@@ -1297,8 +1297,10 @@ class _PostCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final found = post.type == 'found';
-    final tagColor = found ? CampusTheme.found : CampusTheme.lost;
     final dark = Theme.of(context).brightness == Brightness.dark;
+    final tagColor = found
+        ? (dark ? CampusTheme.foundDark : CampusTheme.found)
+        : (dark ? CampusTheme.lostDark : CampusTheme.lost);
     final tagSurface = found
         ? (dark ? CampusTheme.foundSurfaceDark : CampusTheme.foundSurface)
         : (dark ? CampusTheme.lostSurfaceDark : CampusTheme.lostSurface);
@@ -1315,7 +1317,7 @@ class _PostCard extends StatelessWidget {
     return Card(
       clipBehavior: Clip.antiAlias,
       elevation: 2,
-      shadowColor: const Color(0x1F0C416C),
+      shadowColor: const Color(0x223F278A),
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(20),
         side: BorderSide(color: tagColor.withValues(alpha: .3)),
@@ -1586,6 +1588,7 @@ class _PostCard extends StatelessWidget {
     Color tagSurface,
     Color neutralSurface,
   ) {
+    final dark = Theme.of(context).brightness == Brightness.dark;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -1603,15 +1606,15 @@ class _PostCard extends StatelessWidget {
               ),
               _PostTag(
                 label: post.category,
-                color: CampusTheme.other,
+                color: dark ? CampusTheme.otherDark : CampusTheme.other,
                 surface: neutralSurface,
               ),
               if (post.isMine && post.retrievalRequestStatus != null)
                 _PostTag(
                   label:
                       'RETRIEVAL ${post.retrievalRequestStatus!.toUpperCase()}',
-                  color: post.retrievalRequestStatus == 'pending'
-                      ? const Color(0xFFB17B2C)
+                  color: dark
+                      ? CampusTheme.otherDark
                       : CampusTheme.other,
                   surface: neutralSurface,
                 ),
@@ -4231,16 +4234,17 @@ class InboxScreen extends StatefulWidget {
   State<InboxScreen> createState() => _InboxScreenState();
 }
 
-class _ClaimDecisionDialog extends StatefulWidget {
-  const _ClaimDecisionDialog({required this.decision});
+class _OwnerDecisionDialog extends StatefulWidget {
+  const _OwnerDecisionDialog({required this.decision, required this.subject});
 
   final String decision;
+  final String subject;
 
   @override
-  State<_ClaimDecisionDialog> createState() => _ClaimDecisionDialogState();
+  State<_OwnerDecisionDialog> createState() => _OwnerDecisionDialogState();
 }
 
-class _ClaimDecisionDialogState extends State<_ClaimDecisionDialog> {
+class _OwnerDecisionDialogState extends State<_OwnerDecisionDialog> {
   final _reasonController = TextEditingController();
   String? _reasonError;
 
@@ -4255,8 +4259,8 @@ class _ClaimDecisionDialogState extends State<_ClaimDecisionDialog> {
     return AlertDialog(
       title: Text(
         widget.decision == 'approve'
-            ? 'Approve this claim?'
-            : 'Decline this claim?',
+            ? 'Approve this ${widget.subject}?'
+            : 'Decline this ${widget.subject}?',
       ),
       content: TextField(
         controller: _reasonController,
@@ -4366,7 +4370,12 @@ class _InboxScreenState extends State<InboxScreen> {
   late Future<List<Map<String, dynamic>>> _handovers;
   late Future<List<Map<String, dynamic>>> _authorClaims;
   late Future<List<Map<String, dynamic>>> _evidence;
+  late Future<List<Map<String, dynamic>>> _outboundClaims;
+  late Future<List<Map<String, dynamic>>> _outboundEvidence;
   String _conversationFilter = 'all';
+  String _handoverView = 'active';
+  String _claimDirection = 'inbound';
+  String _evidenceDirection = 'inbound';
 
   @override
   void initState() {
@@ -4377,6 +4386,8 @@ class _InboxScreenState extends State<InboxScreen> {
     _handovers = _loadHandovers();
     _authorClaims = _loadAuthorClaims();
     _evidence = _loadEvidence();
+    _outboundClaims = Future.value(const <Map<String, dynamic>>[]);
+    _outboundEvidence = Future.value(const <Map<String, dynamic>>[]);
   }
 
   @override
@@ -4406,20 +4417,37 @@ class _InboxScreenState extends State<InboxScreen> {
   }
 
   Future<List<Map<String, dynamic>>> _loadHandovers() async {
-    final response = await widget.api.dio.get<Map<String, dynamic>>(
-      '/handovers',
-    );
-    final data = response.data?['data'];
-    if (data is! List) return const [];
-    return data.whereType<Map<String, dynamic>>().toList();
+    final results = await Future.wait([
+      _loadAllPages('/handovers'),
+      _loadAllPages('/retrieval-history'),
+    ]);
+    final handovers = [...results[0], ...results[1]];
+    handovers.sort((first, second) {
+      final firstDate =
+          DateTime.tryParse('${first['history_at'] ?? ''}') ??
+          DateTime.fromMillisecondsSinceEpoch(0);
+      final secondDate =
+          DateTime.tryParse('${second['history_at'] ?? ''}') ??
+          DateTime.fromMillisecondsSinceEpoch(0);
+      return secondDate.compareTo(firstDate);
+    });
+    return handovers;
   }
 
   Future<List<Map<String, dynamic>>> _loadAuthorClaims() async {
-    return _loadAllPages('/claims/awaiting-post-author');
+    return _loadAllPages('/received-claims');
   }
 
   Future<List<Map<String, dynamic>>> _loadEvidence() async {
-    return _loadAllPages('/my-evidence');
+    return _loadAllPages('/received-evidence');
+  }
+
+  Future<List<Map<String, dynamic>>> _loadOutboundClaims() async {
+    return _loadAllPages('/my-claims');
+  }
+
+  Future<List<Map<String, dynamic>>> _loadOutboundEvidence() async {
+    return _loadAllPages('/my-sightings');
   }
 
   Future<List<Map<String, dynamic>>> _loadAllPages(String path) async {
@@ -4477,6 +4505,111 @@ class _InboxScreenState extends State<InboxScreen> {
     if (!mounted) return;
     final data = notification['data'] as Map<String, dynamic>? ?? const {};
     final conversationId = data['conversation_id'] as int?;
+    final notificationType = notification['type'] as String? ?? '';
+    if (const {
+      'handover_completed',
+      'handover_unsuccessful',
+      'post_retrieval_approved',
+    }.contains(notificationType)) {
+      setState(() {
+        _tab = 2;
+        _handoverView = 'history';
+        _handovers = _loadHandovers();
+      });
+      return;
+    }
+    if (const {
+      'handover_scheduled',
+      'handover_reschedule_requested',
+      'handover_reschedule_rejected',
+    }.contains(notificationType)) {
+      setState(() {
+        _tab = 2;
+        _handoverView = 'active';
+        _handovers = _loadHandovers();
+      });
+      return;
+    }
+    if (const {
+      'lost_sighting',
+      'sighting_submitted',
+    }.contains(notificationType)) {
+      setState(() {
+        _tab = 4;
+        _evidenceDirection = 'inbound';
+        _evidence = _loadEvidence();
+      });
+      return;
+    }
+    if (const {
+      'sighting_owner_reviewed',
+      'sighting_owner_decision_undone',
+    }.contains(notificationType)) {
+      setState(() {
+        _tab = 4;
+        _evidenceDirection = 'outbound';
+        _outboundEvidence = _loadOutboundEvidence();
+      });
+      return;
+    }
+    if (notificationType == 'sighting_rejected') {
+      final isInbound = data['recipient_role'] == 'post_owner';
+      setState(() {
+        _tab = 4;
+        _evidenceDirection = isInbound ? 'inbound' : 'outbound';
+        if (isInbound) {
+          _evidence = _loadEvidence();
+        } else {
+          _outboundEvidence = _loadOutboundEvidence();
+        }
+      });
+      return;
+    }
+    if (notificationType == 'sighting_approved') {
+      setState(() {
+        _tab = 2;
+        _handoverView = 'active';
+        _handovers = _loadHandovers();
+      });
+      return;
+    }
+    if (notificationType == 'claim_pending') {
+      setState(() {
+        _tab = 3;
+        _claimDirection = 'inbound';
+        _authorClaims = _loadAuthorClaims();
+      });
+      return;
+    }
+    if (const {
+      'claim_owner_approved',
+      'claim_owner_rejected',
+      'claim_owner_decision_undone',
+    }.contains(notificationType)) {
+      setState(() {
+        _tab = 3;
+        _claimDirection = 'outbound';
+        _outboundClaims = _loadOutboundClaims();
+      });
+      return;
+    }
+    if (notificationType == 'claim_approved') {
+      setState(() {
+        _tab = 2;
+        _handoverView = 'active';
+        _handovers = _loadHandovers();
+      });
+      return;
+    }
+    if (notificationType == 'claim_rejected') {
+      setState(() {
+        _tab = 3;
+        _claimDirection = 'outbound';
+        _outboundClaims = _loadOutboundClaims();
+      });
+      return;
+    }
+
     if (conversationId != null) {
       try {
         final response = await widget.api.dio.get<Map<String, dynamic>>(
@@ -4513,22 +4646,6 @@ class _InboxScreenState extends State<InboxScreen> {
       return;
     }
 
-    final notificationType = notification['type'] as String? ?? '';
-    if (notificationType == 'lost_sighting') {
-      setState(() {
-        _tab = 4;
-        _evidence = _loadEvidence();
-      });
-      return;
-    }
-    if (notificationType == 'claim_owner_review') {
-      setState(() {
-        _tab = 3;
-        _authorClaims = _loadAuthorClaims();
-      });
-      return;
-    }
-
     final postId = data['post_id'] as int?;
     if (postId == null) return;
     await _openOriginPost(postId, isOwner: false);
@@ -4544,7 +4661,7 @@ class _InboxScreenState extends State<InboxScreen> {
             icon: Icons.inbox_rounded,
             title: 'Your campus inbox',
             subtitle: 'Updates, chats, evidence, claims, and handovers.',
-            tint: Color(0xFF8C5A92),
+            tint: Color(0xFF7C44BC),
           ),
         ),
         Row(
@@ -4852,11 +4969,11 @@ class _InboxScreenState extends State<InboxScreen> {
     );
   }
 
-  Future<bool> _decideEvidence(int id, String decision) async {
+  Future<bool> _decideEvidence(int id, String decision, String reason) async {
     try {
       await widget.api.dio.patch<void>(
         '/sightings/$id',
-        data: {'decision': decision},
+        data: {'decision': decision, 'reason': reason},
       );
       if (mounted) {
         setState(() {
@@ -4882,6 +4999,16 @@ class _InboxScreenState extends State<InboxScreen> {
       }
       return false;
     }
+  }
+
+  Future<bool> _requestEvidenceDecision(int id, String decision) async {
+    final reason = await showDialog<String>(
+      context: context,
+      builder: (_) =>
+          _OwnerDecisionDialog(decision: decision, subject: 'evidence'),
+    );
+    if (reason == null || reason.isEmpty) return false;
+    return _decideEvidence(id, decision, reason);
   }
 
   Future<bool> _undoEvidenceDecision(int id) async {
@@ -5004,6 +5131,29 @@ class _InboxScreenState extends State<InboxScreen> {
   }
 
   Widget _evidenceList() {
+    return Column(
+      children: [
+        _submissionDirectionSelector(
+          value: _evidenceDirection,
+          onChanged: (direction) => setState(() {
+            _evidenceDirection = direction;
+            if (direction == 'inbound') {
+              _evidence = _loadEvidence();
+            } else {
+              _outboundEvidence = _loadOutboundEvidence();
+            }
+          }),
+        ),
+        Expanded(
+          child: _evidenceDirection == 'inbound'
+              ? _inboundEvidenceList()
+              : _outboundEvidenceList(),
+        ),
+      ],
+    );
+  }
+
+  Widget _inboundEvidenceList() {
     return FutureBuilder<List<Map<String, dynamic>>>(
       future: _evidence,
       builder: (context, snapshot) {
@@ -5027,8 +5177,8 @@ class _InboxScreenState extends State<InboxScreen> {
         if (evidence.isEmpty) {
           return const _EmptyState(
             icon: Icons.photo_library_outlined,
-            title: 'No evidence submitted',
-            message: 'Evidence sent for your lost posts will appear here for review.',
+            title: 'No evidence received',
+            message: 'Proofs sent for your lost posts will appear here.',
           );
         }
         final groups = _groupByPost(evidence);
@@ -5118,6 +5268,127 @@ class _InboxScreenState extends State<InboxScreen> {
     );
   }
 
+  Widget _outboundEvidenceList() {
+    return FutureBuilder<List<Map<String, dynamic>>>(
+      future: _outboundEvidence,
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const Center(child: CircularProgressIndicator());
+        }
+        if (snapshot.hasError) {
+          return _EmptyState(
+            icon: Icons.cloud_off,
+            title: 'Sent evidence unavailable',
+            message: widget.api.errorMessage(snapshot.error!),
+            action: FilledButton.tonal(
+              onPressed: () => setState(() {
+                _outboundEvidence = _loadOutboundEvidence();
+              }),
+              child: const Text('Try again'),
+            ),
+          );
+        }
+        final evidence = snapshot.data ?? const [];
+        if (evidence.isEmpty) {
+          return const _EmptyState(
+            icon: Icons.outbox_outlined,
+            title: 'No evidence sent',
+            message: 'Proofs you send for other people’s lost posts will appear here.',
+          );
+        }
+        return RefreshIndicator(
+          onRefresh: () async {
+            setState(() {
+              _outboundEvidence = _loadOutboundEvidence();
+            });
+          },
+          child: ListView.separated(
+            padding: const EdgeInsets.all(14),
+            itemCount: evidence.length,
+            separatorBuilder: (_, _) => const SizedBox(height: 8),
+            itemBuilder: (context, index) {
+              final item = evidence[index];
+              final image = item['evidence_image'] as String?;
+              return Card(
+                child: ListTile(
+                  title: Text(item['item_name'] as String? ?? 'Lost item'),
+                  subtitle: Text(
+                    '${_evidenceStatus(item)}'
+                    '${(item['evidence_text'] as String? ?? '').isEmpty ? '' : '\n${item['evidence_text']}'}',
+                  ),
+                  isThreeLine:
+                      (item['evidence_text'] as String? ?? '').isNotEmpty,
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: () {
+                    final postId = item['post_id'] as int?;
+                    if (postId != null) {
+                      _openOriginPost(
+                        postId,
+                        isOwner: false,
+                        returnInboxTab: 4,
+                      );
+                    }
+                  },
+                  leading: image == null
+                      ? const Icon(Icons.photo_outlined)
+                      : IconButton(
+                          tooltip: 'View submitted proof',
+                          onPressed: () => _viewEvidence(
+                            context,
+                            'Submitted proof',
+                            [image],
+                          ),
+                          icon: const Icon(Icons.visibility_outlined),
+                        ),
+                ),
+              );
+            },
+          ),
+        );
+      },
+    );
+  }
+
+  String _evidenceStatus(Map<String, dynamic> item) {
+    final handoverStatus = item['handover_status'] as String?;
+    if (handoverStatus == 'completed') return 'Retrieved';
+    if (handoverStatus == 'unsuccessful') return 'Handover unsuccessful';
+    if (item['admin_decision'] == 'approved') return 'Approved by TMC';
+    if (item['admin_decision'] == 'rejected' ||
+        item['author_decision'] == 'rejected') {
+      return 'Not approved';
+    }
+    if (item['author_decision'] == 'approved') {
+      return 'Approved by post owner · Awaiting TMC review';
+    }
+    return 'Awaiting post owner review';
+  }
+
+  Widget _submissionDirectionSelector({
+    required String value,
+    required ValueChanged<String> onChanged,
+  }) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 4, 12, 0),
+      child: Wrap(
+        alignment: WrapAlignment.center,
+        spacing: 8,
+        children: [
+          ChoiceChip(
+            label: const Text('Inbound · Received'),
+            selected: value == 'inbound',
+            onSelected: (_) => onChanged('inbound'),
+          ),
+          ChoiceChip(
+            label: const Text('Outbound · Sent'),
+            selected: value == 'outbound',
+            onSelected: (_) => onChanged('outbound'),
+          ),
+        ],
+      ),
+    );
+  }
+
   Future<void> _showEvidenceForPost(
     int postId,
     List<Map<String, dynamic>> submissions,
@@ -5191,6 +5462,13 @@ class _InboxScreenState extends State<InboxScreen> {
                                   padding: const EdgeInsets.only(top: 8),
                                   child: Text(item['evidence_text'] as String),
                                 ),
+                              if (item['author_decision_reason'] is String)
+                                Padding(
+                                  padding: const EdgeInsets.only(top: 8),
+                                  child: Text(
+                                    'Owner decision reason: ${item['author_decision_reason']}',
+                                  ),
+                                ),
                               if (item['evidence_image'] is String)
                                 OutlinedButton.icon(
                                   onPressed: () => _viewEvidence(
@@ -5260,7 +5538,7 @@ class _InboxScreenState extends State<InboxScreen> {
                                     children: [
                                       FilledButton.tonal(
                                         onPressed: () async {
-                                          if (await _decideEvidence(
+                                          if (await _requestEvidenceDecision(
                                             id,
                                             'approve',
                                           )) {
@@ -5287,7 +5565,7 @@ class _InboxScreenState extends State<InboxScreen> {
                                       ),
                                       OutlinedButton(
                                         onPressed: () async {
-                                          if (await _decideEvidence(
+                                          if (await _requestEvidenceDecision(
                                             id,
                                             'reject',
                                           )) {
@@ -5349,7 +5627,8 @@ class _InboxScreenState extends State<InboxScreen> {
   Future<bool> _requestAuthorClaimDecision(int id, String decision) async {
     final reason = await showDialog<String>(
       context: context,
-      builder: (_) => _ClaimDecisionDialog(decision: decision),
+      builder: (_) =>
+          _OwnerDecisionDialog(decision: decision, subject: 'claim'),
     );
     if (reason == null || reason.isEmpty) return false;
     return _decideAuthorClaim(id, decision, reason);
@@ -5419,6 +5698,29 @@ class _InboxScreenState extends State<InboxScreen> {
   }
 
   Widget _authorClaimList() {
+    return Column(
+      children: [
+        _submissionDirectionSelector(
+          value: _claimDirection,
+          onChanged: (direction) => setState(() {
+            _claimDirection = direction;
+            if (direction == 'inbound') {
+              _authorClaims = _loadAuthorClaims();
+            } else {
+              _outboundClaims = _loadOutboundClaims();
+            }
+          }),
+        ),
+        Expanded(
+          child: _claimDirection == 'inbound'
+              ? _inboundClaimList()
+              : _outboundClaimList(),
+        ),
+      ],
+    );
+  }
+
+  Widget _inboundClaimList() {
     return FutureBuilder<List<Map<String, dynamic>>>(
       future: _authorClaims,
       builder: (context, snapshot) {
@@ -5442,7 +5744,7 @@ class _InboxScreenState extends State<InboxScreen> {
         if (claims.isEmpty) {
           return const _EmptyState(
             icon: Icons.fact_check_outlined,
-            title: 'No claims need your decision',
+            title: 'No claims received',
             message: 'Claims submitted for your found posts will appear here.',
           );
         }
@@ -5514,6 +5816,137 @@ class _InboxScreenState extends State<InboxScreen> {
         );
       },
     );
+  }
+
+  Widget _outboundClaimList() {
+    return FutureBuilder<List<Map<String, dynamic>>>(
+      future: _outboundClaims,
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const Center(child: CircularProgressIndicator());
+        }
+        if (snapshot.hasError) {
+          return _EmptyState(
+            icon: Icons.cloud_off,
+            title: 'Sent claims unavailable',
+            message: widget.api.errorMessage(snapshot.error!),
+            action: FilledButton.tonal(
+              onPressed: () => setState(() {
+                _outboundClaims = _loadOutboundClaims();
+              }),
+              child: const Text('Try again'),
+            ),
+          );
+        }
+        final claims = snapshot.data ?? const [];
+        if (claims.isEmpty) {
+          return const _EmptyState(
+            icon: Icons.outbox_outlined,
+            title: 'No claims sent',
+            message: 'Claims you submit for found items will appear here.',
+          );
+        }
+        return RefreshIndicator(
+          onRefresh: () async {
+            setState(() {
+              _outboundClaims = _loadOutboundClaims();
+            });
+          },
+          child: ListView.separated(
+            padding: const EdgeInsets.all(14),
+            itemCount: claims.length,
+            separatorBuilder: (_, _) => const SizedBox(height: 8),
+            itemBuilder: (context, index) {
+              final claim = claims[index];
+              final answers = claim['answers'] is List
+                  ? (claim['answers'] as List).whereType<String>().toList()
+                  : const <String>[];
+              final images = claim['evidence_images'] is List
+                  ? (claim['evidence_images'] as List)
+                        .whereType<String>()
+                        .toList()
+                  : const <String>[];
+              return Card(
+                child: Padding(
+                  padding: const EdgeInsets.all(14),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        claim['item_name'] as String? ?? 'Found item',
+                        style: Theme.of(context).textTheme.titleMedium,
+                      ),
+                      Text(_claimStatus(claim)),
+                      if (answers.isNotEmpty)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 6),
+                          child: Text('Your answers: ${answers.join(' · ')}'),
+                        ),
+                      if (claim['author_decision_reason'] is String)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 6),
+                          child: Text(
+                            'Post owner: ${claim['author_decision_reason']}',
+                          ),
+                        ),
+                      if (claim['review_reason'] is String)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 6),
+                          child: Text('TMC: ${claim['review_reason']}'),
+                        ),
+                      Wrap(
+                        spacing: 8,
+                        children: [
+                          if (images.isNotEmpty)
+                            OutlinedButton.icon(
+                              onPressed: () => _viewEvidence(
+                                context,
+                                'Claim ownership photos',
+                                images,
+                              ),
+                              icon: const Icon(Icons.photo_library_outlined),
+                              label: const Text('View photos'),
+                            ),
+                          OutlinedButton.icon(
+                            onPressed: () {
+                              final postId = claim['post_id'] as int?;
+                              if (postId != null) {
+                                _openOriginPost(
+                                  postId,
+                                  isOwner: false,
+                                  returnInboxTab: 3,
+                                );
+                              }
+                            },
+                            icon: const Icon(Icons.open_in_new),
+                            label: const Text('View Post'),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              );
+            },
+          ),
+        );
+      },
+    );
+  }
+
+  String _claimStatus(Map<String, dynamic> claim) {
+    final handoverStatus = claim['handover_status'] as String?;
+    if (handoverStatus == 'completed') return 'Retrieved';
+    if (handoverStatus == 'unsuccessful') return 'Handover unsuccessful';
+    if (claim['status'] == 'rejected') return 'Not approved by TMC';
+    if (claim['author_decision'] == 'rejected') {
+      return 'Declined by post owner';
+    }
+    if (claim['status'] == 'approved') return 'Approved by TMC';
+    if (claim['author_decision'] == 'approved') {
+      return 'Approved by post owner · Awaiting TMC review';
+    }
+    return 'Awaiting post owner review';
   }
 
   Future<void> _showClaimsForPost(
@@ -5822,10 +6255,35 @@ class _InboxScreenState extends State<InboxScreen> {
   }
 
   Future<void> _openHandover(Map<String, dynamic> handover) async {
+    if (handover['history_kind'] == 'retrieval_request') {
+      await showDialog<void>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: Text(handover['item_name'] as String? ?? 'Campus item'),
+          content: Text(
+            'TMC administrators approved this retrieval request'
+            '${handover['history_at'] is String ? ' on ${handover['history_at']}' : ''}.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext),
+              child: const Text('Close'),
+            ),
+          ],
+        ),
+      );
+      return;
+    }
     final completed = handover['completed'] == true;
     final confirmed = handover['my_confirmation_at'] != null;
     final status = handover['status'] as String? ?? 'awaiting_admin';
     final canApprove = _canApproveHandover(handover);
+    final rescheduleAttempts =
+        int.tryParse('${handover['reschedule_attempts'] ?? 0}') ?? 0;
+    final rescheduleLimit =
+        int.tryParse('${handover['reschedule_limit'] ?? 2}') ?? 2;
+    final canRequestReschedule =
+        status == 'scheduled' && rescheduleAttempts < rescheduleLimit;
     final receiptCode = handover['receipt_code'] as String?;
     final requestReschedule = await showDialog<bool>(
       context: context,
@@ -5873,6 +6331,10 @@ class _InboxScreenState extends State<InboxScreen> {
               Text('Date: ${handover['scheduled_at']}'),
               Text('Place: ${handover['location'] ?? 'TMC campus'}'),
             ],
+            if ((handover['failure_reason'] as String? ?? '').isNotEmpty) ...[
+              const SizedBox(height: 8),
+              Text('Outcome: ${handover['failure_reason']}'),
+            ],
             if (receiptCode != null) ...[
               const SizedBox(height: 12),
               const Text('Handover receipt'),
@@ -5887,8 +6349,10 @@ class _InboxScreenState extends State<InboxScreen> {
             if (status == 'scheduled' || status == 'reschedule_requested') ...[
               const SizedBox(height: 8),
               Text(
-                'Reschedule requests: ${handover['reschedule_attempts'] ?? 0} / ${handover['reschedule_limit'] ?? 2}',
+                'Reschedule requests: $rescheduleAttempts / $rescheduleLimit',
               ),
+              if (status == 'scheduled' && !canRequestReschedule)
+                const Text('You have used all reschedule attempts.'),
               if (handover['reschedule_reason'] is String)
                 Text('Request: ${handover['reschedule_reason']}'),
             ],
@@ -5906,7 +6370,7 @@ class _InboxScreenState extends State<InboxScreen> {
               icon: const Icon(Icons.check_circle_outline),
               label: const Text('Agree to handover'),
             ),
-          if (status == 'scheduled')
+          if (canRequestReschedule)
             OutlinedButton(
               onPressed: () => Navigator.pop(dialogContext, true),
               child: const Text('Request reschedule'),
@@ -6103,6 +6567,39 @@ class _InboxScreenState extends State<InboxScreen> {
   }
 
   Widget _handoverList() {
+    return Column(
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(12, 4, 12, 0),
+          child: Wrap(
+            alignment: WrapAlignment.center,
+            spacing: 8,
+            children: [
+              ChoiceChip(
+                label: const Text('Active'),
+                selected: _handoverView == 'active',
+                onSelected: (_) => setState(() {
+                  _handoverView = 'active';
+                  _handovers = _loadHandovers();
+                }),
+              ),
+              ChoiceChip(
+                label: const Text('History'),
+                selected: _handoverView == 'history',
+                onSelected: (_) => setState(() {
+                  _handoverView = 'history';
+                  _handovers = _loadHandovers();
+                }),
+              ),
+            ],
+          ),
+        ),
+        Expanded(child: _handoverItems()),
+      ],
+    );
+  }
+
+  Widget _handoverItems() {
     return FutureBuilder<List<Map<String, dynamic>>>(
       future: _handovers,
       builder: (context, snapshot) {
@@ -6122,12 +6619,23 @@ class _InboxScreenState extends State<InboxScreen> {
             ),
           );
         }
-        final handovers = snapshot.data ?? const [];
+        final allHandovers = snapshot.data ?? const [];
+        final handovers = allHandovers.where((handover) {
+          final status = handover['status'] as String? ?? '';
+          final isHistory = status == 'completed' || status == 'unsuccessful';
+          return _handoverView == 'history' ? isHistory : !isHistory;
+        }).toList();
         if (handovers.isEmpty) {
-          return const _EmptyState(
-            icon: Icons.handshake_outlined,
-            title: 'No handovers yet',
-            message: 'Claims and lost-item evidence will appear here after administrator approval and the required participant agreement.',
+          return _EmptyState(
+            icon: _handoverView == 'history'
+                ? Icons.history
+                : Icons.handshake_outlined,
+            title: _handoverView == 'history'
+                ? 'No handover history yet'
+                : 'No active handovers',
+            message: _handoverView == 'history'
+                ? 'Completed retrievals and unsuccessful transactions will appear here.'
+                : 'Claims and lost-item evidence appear here after the required approvals.',
           );
         }
         return RefreshIndicator(
@@ -6161,6 +6669,19 @@ class _InboxScreenState extends State<InboxScreen> {
               };
               final itemType = (handover['type'] as String? ?? 'item')
                   .toUpperCase();
+              final participantSummary =
+                  handover['history_kind'] == 'retrieval_request'
+                  ? 'TMC-approved retrieval request'
+                  : 'Owner: ${ownerConfirmed ? 'approved' : 'waiting'} · Other participant: ${finderConfirmed ? 'approved' : 'waiting'}';
+              final historyDate =
+                  handover['history_at'] ??
+                  handover['completed_at'] ??
+                  handover['unsuccessful_at'];
+              final statusDate = handover['scheduled_at'] is String
+                  ? handover['scheduled_at'] as String
+                  : _handoverView == 'history' && historyDate is String
+                  ? historyDate
+                  : null;
               return Card(
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
@@ -6181,12 +6702,12 @@ class _InboxScreenState extends State<InboxScreen> {
                       ),
                       subtitle: Text(
                         '$itemType item · With ${handover['other_first_name'] ?? 'TMC member'}'
-                        '\nOwner: ${ownerConfirmed ? 'approved' : 'waiting'} · Other participant: ${finderConfirmed ? 'approved' : 'waiting'}'
-                        '\n$statusLabel${handover['scheduled_at'] is String ? ' · ${handover['scheduled_at']}' : ''}',
+                        '\n$participantSummary'
+                        '\n$statusLabel${statusDate == null ? '' : ' · $statusDate'}',
                       ),
                       isThreeLine: true,
                       trailing: const Icon(Icons.chevron_right),
-                      onTap: completed ? null : () => _openHandover(handover),
+                      onTap: () => _openHandover(handover),
                     ),
                     if (canApprove)
                       Align(
@@ -7254,7 +7775,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
           icon: Icons.account_circle_outlined,
           title: 'Your profile',
           subtitle: 'Manage your details and keep track of your listings.',
-          tint: Color(0xFFB17B2C),
+          tint: Color(0xFF5F84DB),
         ),
         const SizedBox(height: 16),
         Center(

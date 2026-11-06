@@ -15,6 +15,7 @@ class LostSighting extends Model
         'evidence_text',
         'evidence_image',
         'author_decision',
+        'author_decision_reason',
         'admin_decision',
         'admin_reason',
         'owner_decision_batch_id',

@@ -39,6 +39,9 @@
                                                 {{ ucfirst($claim->status) }}
                                             @endif
                                         </span>
+                                        @if ($claim->author_decision_reason)
+                                            <span><strong>Owner's reason:</strong> {{ $claim->author_decision_reason }}</span>
+                                        @endif
                                         <span class="muted">{{ $claim->created_at->format('M j, Y g:i A') }}</span>
                                     </div>
                                     <a class="button secondary" href="{{ route('admin.claims.show', $claim) }}">{{ $claim->status === 'pending' && $claim->author_decision === 'approved' ? 'Review claim' : 'View claim' }}</a>

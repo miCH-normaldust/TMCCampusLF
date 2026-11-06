@@ -138,6 +138,15 @@ class EngagementWorkflowTest extends TestCase
             'notifiable_id' => $admin->id,
             'type' => 'admin_chat_message',
         ]);
+        $this->getJson('/api/v1/conversations')
+            ->assertOk()
+            ->assertJsonPath('data.0.id', $conversationId)
+            ->assertJsonPath('data.0.type', 'admin');
+        $this->actingAs($admin, 'admin')
+            ->get(route('admin.chats.index', ['conversation' => $conversationId]))
+            ->assertOk()
+            ->assertSee('Please review this approved claim.');
+        Sanctum::actingAs($owner);
         $this->getJson('/api/v1/claims/awaiting-post-author')
             ->assertOk()
             ->assertJsonPath('data.0.id', $claim->id);
@@ -501,7 +510,7 @@ class EngagementWorkflowTest extends TestCase
         $this->actingAs($this->createUser('Admin', 'Member', 'evidence-admin', 'admin'), 'admin')
             ->get(route('admin.sightings.index'))
             ->assertOk()
-            ->assertSee('Submitted evidence awaiting owner review')
+            ->assertSee('Awaiting owner review')
             ->assertSee('Updated: seen near the library.');
 
         Sanctum::actingAs($owner);
@@ -532,6 +541,7 @@ class EngagementWorkflowTest extends TestCase
         Sanctum::actingAs($owner);
         $this->patchJson("/api/v1/sightings/{$sightingId}", [
             'decision' => 'approve',
+            'reason' => 'The evidence clearly identifies the item.',
         ])->assertOk();
         $admin = $this->createUser('Admin', 'Reviewer', 'review-admin', 'admin');
         $this->actingAs($admin, 'admin')
@@ -579,16 +589,19 @@ class EngagementWorkflowTest extends TestCase
         Sanctum::actingAs($owner);
         $this->patchJson("/api/v1/sightings/{$approvedEvidence->id}", [
             'decision' => 'approve',
+            'reason' => 'The photo and description match the item.',
         ])->assertOk();
 
         $this->assertDatabaseHas('lost_sightings', [
             'id' => $approvedEvidence->id,
             'author_decision' => 'approved',
+            'author_decision_reason' => 'The photo and description match the item.',
             'admin_decision' => 'pending',
         ]);
         $this->assertDatabaseHas('lost_sightings', [
             'id' => $otherEvidence->id,
             'author_decision' => 'rejected',
+            'author_decision_reason' => 'Another evidence submission for this item was approved.',
             'admin_decision' => 'pending',
         ]);
         $this->assertDatabaseHas('notifications', [
@@ -599,7 +612,9 @@ class EngagementWorkflowTest extends TestCase
         $this->actingAs($admin, 'admin')
             ->get(route('admin.sightings.index'))
             ->assertOk()
-            ->assertSee('Approved by owner · Awaiting admin')
+            ->assertSee('Owner approved · Awaiting administrator review')
+            ->assertSee('The photo and description match the item.')
+            ->assertSee('Another evidence submission for this item was approved.')
             ->assertSee('Rejected');
         Sanctum::actingAs($owner);
         $this->patchJson("/api/v1/sightings/{$approvedEvidence->id}/undo-owner-decision")
@@ -628,10 +643,12 @@ class EngagementWorkflowTest extends TestCase
         ]);
         $this->patchJson("/api/v1/sightings/{$rejectedEvidence->id}", [
             'decision' => 'reject',
+            'reason' => 'The photo does not show the claimed feature.',
         ])->assertOk();
         $this->assertDatabaseHas('lost_sightings', [
             'id' => $rejectedEvidence->id,
             'author_decision' => 'rejected',
+            'author_decision_reason' => 'The photo does not show the claimed feature.',
             'admin_decision' => 'pending',
         ]);
     }
@@ -718,7 +735,10 @@ class EngagementWorkflowTest extends TestCase
         ])->assertCreated();
         $firstId = $first->json('sighting_id');
         Sanctum::actingAs($owner);
-        $this->patchJson("/api/v1/sightings/{$firstId}", ['decision' => 'reject'])->assertOk();
+        $this->patchJson("/api/v1/sightings/{$firstId}", [
+            'decision' => 'reject',
+            'reason' => 'This evidence is unclear.',
+        ])->assertOk();
 
         Sanctum::actingAs($finder);
         $second = $this->post('/api/v1/posts/'.$post->id.'/sightings', [
@@ -728,7 +748,10 @@ class EngagementWorkflowTest extends TestCase
         ])->assertCreated();
         $secondId = $second->json('sighting_id');
         Sanctum::actingAs($owner);
-        $this->patchJson("/api/v1/sightings/{$secondId}", ['decision' => 'reject'])->assertOk();
+        $this->patchJson("/api/v1/sightings/{$secondId}", [
+            'decision' => 'reject',
+            'reason' => 'This evidence does not match the item.',
+        ])->assertOk();
 
         Sanctum::actingAs($finder);
         $this->post('/api/v1/posts/'.$post->id.'/sightings', [

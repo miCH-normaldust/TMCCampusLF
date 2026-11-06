@@ -4,8 +4,6 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Admin sign in - TMC CampusLF</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Poppins:wght@600;700&display=swap" rel="stylesheet">
     @vite('resources/css/app.css')
     <style>
         body.admin-login {
@@ -13,22 +11,25 @@
             display: grid;
             place-items: center;
             padding: 24px;
-            background: linear-gradient(135deg, var(--campus-primary), var(--campus-surface) 52%, var(--campus-accent));
+            background:
+                radial-gradient(ellipse at 18% 18%, color-mix(in srgb, var(--campus-primary) 26%, transparent), transparent 34%),
+                radial-gradient(ellipse at 82% 78%, #64B4C433, transparent 36%),
+                linear-gradient(135deg, #E9ECFC, #DDE1FA 54%, #EEF5FF);
             color: var(--campus-text);
-            font: 15px Inter, sans-serif;
+            font: 15px Georgia, serif;
         }
         .login-card {
             width: min(100%, 420px);
             padding: 34px;
             border: 1px solid var(--campus-border);
             border-radius: 18px;
-            background: var(--campus-raised);
-            box-shadow: 0 18px 50px #26323d20;
+            background: linear-gradient(150deg, #F8F8FF, #E4E5F8);
+            box-shadow: 0 22px 60px #1C1D6F25, 0 2px 8px #3F278A12;
         }
         .login-card h1 {
             margin: 0 0 8px;
             color: var(--campus-primary-dark);
-            font: 700 24px Poppins, sans-serif;
+            font: 700 24px Georgia, serif;
         }
         .login-card .muted {
             margin: 0 0 26px;
@@ -59,14 +60,14 @@
             margin-top: 22px;
             border: 0;
             border-radius: 10px;
-            background: var(--campus-primary-dark);
+            background: linear-gradient(110deg, #3F278A, #5C50B1);
             color: #fff;
-            font: 600 15px Inter, sans-serif;
+            font: 600 15px Georgia, serif;
             cursor: pointer;
         }
         .login-card .login-submit:hover {
-            background: var(--campus-primary);
-            color: var(--campus-text);
+            background: linear-gradient(110deg, #7C44BC, #5C50B1);
+            color: #fff;
         }
         .login-error {
             margin-top: 7px;
@@ -79,39 +80,73 @@
             margin-bottom: 24px;
             color: var(--campus-primary-dark);
         }
-        .campuslf-brand-mark {
+        .brand-emblems {
             position: relative;
             display: block;
             flex: none;
-            width: 52px;
-            height: 62px;
+            width: 55px;
+            height: 55px;
+            min-height: 55px;
         }
-        .campuslf-brand-mark .brand-lf {
+        .tmc-brand-logo {
             position: absolute;
             top: 0;
             left: 0;
             z-index: 1;
-            display: grid;
-            place-items: center;
             width: 40px;
             height: 40px;
-            border-radius: 11px;
-            background: var(--campus-primary);
-            color: var(--campus-primary-dark);
-            font: 700 17px Poppins, sans-serif;
+            object-fit: contain;
         }
-        .campuslf-brand-mark img {
+        .campuslf-brand-logo {
             position: absolute;
             right: 0;
             bottom: 0;
             z-index: 2;
-            width: 34px;
-            height: 34px;
-            padding: 2px;
-            border: 1px solid var(--campus-raised);
-            border-radius: 50%;
-            background: var(--campus-raised);
+            width: 29px;
+            height: 29px;
             object-fit: contain;
+            filter: drop-shadow(0 2px 3px #1C1D6F24);
+        }
+        .login-brand strong {
+            font: 700 16px Georgia, serif;
+        }
+        .login-card input {
+            background: #FCFCFF;
+        }
+        .login-card .login-submit:focus-visible,
+        .login-theme-toggle:focus-visible {
+            outline: 3px solid #64B4C4;
+            outline-offset: 3px;
+        }
+        .login-card .flash {
+            color: #1C1D6F;
+            background: #C8DEF8;
+        }
+        body[data-theme="dark"].admin-login {
+            background:
+                radial-gradient(ellipse at 18% 18%, #7C44BC55, transparent 36%),
+                radial-gradient(ellipse at 82% 78%, #3539A433, transparent 38%),
+                linear-gradient(135deg, #060941, #1C1D6F 60%, #10134B);
+        }
+        body[data-theme="dark"] .login-card {
+            border-color: #3F56AE;
+            background: linear-gradient(150deg, #222879, #11144C);
+            box-shadow: 0 22px 60px #00000066;
+        }
+        body[data-theme="dark"] .login-card h1,
+        body[data-theme="dark"] .login-brand {
+            color: #C8DEF8;
+        }
+        body[data-theme="dark"] .login-card input {
+            background: #10134B;
+        }
+        body[data-theme="dark"] .login-card .login-submit {
+            background: linear-gradient(110deg, #7C44BC, #5C50B1);
+            color: #fff;
+        }
+        body[data-theme="dark"] .login-card .login-submit:hover {
+            background: linear-gradient(110deg, #B48CF2, #5F84DB);
+            color: #060941;
         }
         .login-theme-toggle {
             position: fixed;
@@ -130,7 +165,7 @@
 <body class="admin-login">
 <button class="button secondary login-theme-toggle" type="button" aria-pressed="false">Dark mode</button>
 <main class="login-card">
-    <div class="login-brand"><span class="campuslf-brand-mark" aria-hidden="true"><span class="brand-lf">LF</span><img src="{{ asset('images/tmc-logo.png') }}" alt=""></span><strong>TMC CampusLF</strong></div>
+    <div class="login-brand"><span class="brand-emblems" aria-hidden="true"><img class="tmc-brand-logo" src="{{ asset('images/tmc-logo.png') }}" alt=""><img class="campuslf-brand-logo" src="{{ asset('images/campuslf-logo.png') }}" alt=""></span><strong>TMC CampusLF</strong></div>
     <h1>Admin portal</h1>
     <p class="muted">Sign in with your administrator account.</p>
     @if (session('status'))

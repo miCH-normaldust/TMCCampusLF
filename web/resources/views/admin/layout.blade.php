@@ -4,17 +4,15 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>@yield('title', 'Dashboard') - TMC CampusLF Admin</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Poppins:wght@600;700&display=swap" rel="stylesheet">
     @vite('resources/css/app.css')
 </head>
 <body>
 <div class="shell">
     <aside class="side">
         <div class="brand">
-            <span class="campuslf-brand-mark" aria-hidden="true">
-                <span class="brand-lf">LF</span>
-                <img src="{{ asset('images/tmc-logo.png') }}" alt="">
+            <span class="brand-emblems" aria-hidden="true">
+                <img class="tmc-brand-logo" src="{{ asset('images/tmc-logo.png') }}" alt="">
+                <img class="campuslf-brand-logo" src="{{ asset('images/campuslf-logo.png') }}" alt="">
             </span>
             <button class="drawer-toggle" type="button" aria-label="Collapse navigation" aria-expanded="true" title="Collapse navigation">‹</button>
             <span class="nav-label">TMC CampusLF</span>

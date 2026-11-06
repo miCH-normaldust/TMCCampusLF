@@ -306,6 +306,7 @@ class InteractionController extends Controller
                 ? PublicMediaUrl::forPath($sighting->evidence_image)
                 : null,
             'author_decision' => $sighting->author_decision,
+            'author_decision_reason' => $sighting->author_decision_reason,
             'admin_decision' => $sighting->admin_decision,
             'admin_reason' => $sighting->admin_reason,
             'editable_until' => $sighting->created_at->copy()->addHour(),
@@ -320,6 +321,16 @@ class InteractionController extends Controller
 
     public function myEvidence(Request $request): JsonResponse
     {
+        return $this->evidenceForOwner($request, true);
+    }
+
+    public function receivedEvidence(Request $request): JsonResponse
+    {
+        return $this->evidenceForOwner($request, false);
+    }
+
+    private function evidenceForOwner(Request $request, bool $awaitingReview): JsonResponse
+    {
         $evidence = LostSighting::with([
             'post:id,item_name,type,user_id',
             'post.author:id,first_name,last_name',
@@ -327,7 +338,7 @@ class InteractionController extends Controller
             'conversation:id,sighting_id',
         ])
             ->where('answer', 'yes')
-            ->where('admin_decision', '!=', 'approved')
+            ->when($awaitingReview, fn ($query) => $query->where('admin_decision', '!=', 'approved'))
             ->whereHas('post', fn ($query) => $query->where('user_id', $request->user()->id))
             ->latest()
             ->paginate(25)
@@ -342,6 +353,7 @@ class InteractionController extends Controller
                     ? PublicMediaUrl::forPath($sighting->evidence_image)
                     : null,
                 'author_decision' => $sighting->author_decision,
+                'author_decision_reason' => $sighting->author_decision_reason,
                 'admin_decision' => $sighting->admin_decision,
                 'admin_reason' => $sighting->admin_reason,
                 'can_undo_owner_decision' => $sighting->owner_decision_batch_id !== null
@@ -364,6 +376,38 @@ class InteractionController extends Controller
         return response()->json($evidence);
     }
 
+    public function mySightings(Request $request): JsonResponse
+    {
+        $sightings = LostSighting::with([
+            'post:id,item_name,type,user_id',
+            'post.author:id,first_name,last_name',
+            'handover:id,sighting_id,status',
+        ])
+            ->where('user_id', $request->user()->id)
+            ->where('answer', 'yes')
+            ->latest()
+            ->paginate(25)
+            ->through(fn (LostSighting $sighting): array => [
+                'id' => $sighting->id,
+                'post_id' => $sighting->post_id,
+                'item_name' => $sighting->post->item_name,
+                'author_first_name' => $sighting->post->author->first_name,
+                'author_last_name' => $sighting->post->author->last_name,
+                'evidence_text' => $sighting->evidence_text,
+                'evidence_image' => $sighting->evidence_image
+                    ? PublicMediaUrl::forPath($sighting->evidence_image)
+                    : null,
+                'author_decision' => $sighting->author_decision,
+                'author_decision_reason' => $sighting->author_decision_reason,
+                'admin_decision' => $sighting->admin_decision,
+                'admin_reason' => $sighting->admin_reason,
+                'handover_status' => $sighting->handover?->status,
+                'created_at' => $sighting->created_at,
+            ]);
+
+        return response()->json($sightings);
+    }
+
     public function sightings(Request $request, Post $post): JsonResponse
     {
         abort_unless($post->user_id === $request->user()->id, 403);
@@ -380,6 +424,7 @@ class InteractionController extends Controller
                     'evidence_text' => $sighting->evidence_text,
                     'evidence_image' => $sighting->evidence_image ? PublicMediaUrl::forPath($sighting->evidence_image) : null,
                     'author_decision' => $sighting->author_decision,
+                    'author_decision_reason' => $sighting->author_decision_reason,
                     'admin_decision' => $sighting->admin_decision,
                     'admin_reason' => $sighting->admin_reason,
                     'can_undo_owner_decision' => $sighting->owner_decision_batch_id !== null
@@ -403,7 +448,10 @@ class InteractionController extends Controller
 
     public function decideSighting(Request $request, LostSighting $sighting): JsonResponse
     {
-        $data = $request->validate(['decision' => ['required', 'in:approve,reject']]);
+        $data = $request->validate([
+            'decision' => ['required', 'in:approve,reject'],
+            'reason' => ['required', 'string', 'max:1000'],
+        ]);
         DB::transaction(function () use ($request, $sighting, $data): void {
             $post = Post::whereKey($sighting->post_id)->lockForUpdate()->firstOrFail();
             $sighting = LostSighting::with('user')
@@ -436,6 +484,7 @@ class InteractionController extends Controller
 
             $sighting->update([
                 'author_decision' => $approved ? 'approved' : 'rejected',
+                'author_decision_reason' => $data['reason'],
                 'owner_decision_batch_id' => $batchId,
                 'owner_decision_batch_winner_id' => $sighting->id,
             ]);
@@ -452,6 +501,7 @@ class InteractionController extends Controller
                 foreach ($otherSightings as $otherSighting) {
                     $otherSighting->update([
                         'author_decision' => 'rejected',
+                        'author_decision_reason' => 'Another evidence submission for this item was approved.',
                         'owner_decision_batch_id' => $batchId,
                         'owner_decision_batch_winner_id' => $sighting->id,
                     ]);
@@ -549,6 +599,7 @@ class InteractionController extends Controller
             foreach ($batchSightings as $entry) {
                 $entry->update([
                     'author_decision' => 'pending',
+                    'author_decision_reason' => null,
                     'owner_decision_batch_id' => null,
                     'owner_decision_batch_winner_id' => null,
                 ]);

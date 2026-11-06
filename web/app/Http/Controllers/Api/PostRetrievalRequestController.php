@@ -13,6 +13,31 @@ use Illuminate\Support\Str;
 
 class PostRetrievalRequestController extends Controller
 {
+    public function history(Request $request): JsonResponse
+    {
+        $retrievals = PostRetrievalRequest::with([
+            'post:id,item_name,type,user_id',
+        ])
+            ->where('user_id', $request->user()->id)
+            ->where('status', 'approved')
+            ->whereHas('post', fn ($query) => $query->where('user_id', $request->user()->id))
+            ->latest('reviewed_at')
+            ->paginate(25)
+            ->through(fn (PostRetrievalRequest $retrieval): array => [
+                'id' => $retrieval->id,
+                'history_kind' => 'retrieval_request',
+                'transaction_reference' => 'RR-'.str_pad((string) $retrieval->id, 8, '0', STR_PAD_LEFT),
+                'type' => $retrieval->post->type,
+                'item_name' => $retrieval->post->item_name,
+                'other_first_name' => 'TMC administrators',
+                'status' => 'completed',
+                'completed' => true,
+                'history_at' => $retrieval->reviewed_at,
+            ]);
+
+        return response()->json($retrievals);
+    }
+
     public function store(Request $request, Post $post): JsonResponse
     {
         abort_unless($post->user_id === $request->user()->id, 403);

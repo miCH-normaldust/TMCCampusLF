@@ -246,19 +246,21 @@ class AdminPortalPagesTest extends TestCase
             'answers' => ['blue cover'],
             'attempt_no' => 2,
             'status' => 'pending',
-            'author_decision' => 'pending',
+            'author_decision' => 'approved',
+            'author_decision_reason' => 'The claimant identified the hidden label.',
         ]);
         foreach ([
-            ['pending', 'pending'],
-            ['approved', 'pending'],
-            ['approved', 'approved'],
-        ] as [$authorDecision, $adminDecision]) {
+            ['pending', 'pending', null],
+            ['approved', 'pending', 'The evidence matches the item.'],
+            ['approved', 'approved', 'The owner confirmed the match.'],
+        ] as [$authorDecision, $adminDecision, $ownerReason]) {
             LostSighting::create([
                 'post_id' => $lostPost->id,
                 'user_id' => $member->id,
                 'answer' => 'yes',
                 'evidence_text' => 'Seen near the library.',
                 'author_decision' => $authorDecision,
+                'author_decision_reason' => $ownerReason,
                 'admin_decision' => $adminDecision,
             ]);
         }
@@ -268,6 +270,7 @@ class AdminPortalPagesTest extends TestCase
         $claimsResponse = $this->get(route('admin.claims.index'))->assertOk();
         $this->assertSame(1, substr_count($claimsResponse->getContent(), 'data-claim-group="'.$foundPost->id.'"'));
         $this->assertSame(2, substr_count($claimsResponse->getContent(), 'data-claim-id='));
+        $this->assertStringContainsString('The claimant identified the hidden label.', $claimsResponse->getContent());
 
         $proofsResponse = $this->get(route('admin.sightings.index'))->assertOk();
         $this->assertSame(1, substr_count($proofsResponse->getContent(), 'data-proof-group="'.$lostPost->id.'"'));
@@ -275,6 +278,8 @@ class AdminPortalPagesTest extends TestCase
         $this->assertStringContainsString('Awaiting owner review', $proofsResponse->getContent());
         $this->assertStringContainsString('Awaiting administrator review', $proofsResponse->getContent());
         $this->assertStringContainsString('Approved by administrator', $proofsResponse->getContent());
+        $this->assertStringContainsString('The evidence matches the item.', $proofsResponse->getContent());
+        $this->assertStringContainsString('The owner confirmed the match.', $proofsResponse->getContent());
 
         $pendingProofsResponse = $this->get(route('admin.sightings.index', ['status' => 'pending']))->assertOk();
         $this->assertSame(2, substr_count($pendingProofsResponse->getContent(), 'data-sighting-id='));

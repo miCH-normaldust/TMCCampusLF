@@ -120,139 +120,168 @@ class _AuthScreenState extends State<AuthScreen> {
             padding: const EdgeInsets.all(24),
             child: ConstrainedBox(
               constraints: const BoxConstraints(maxWidth: 460),
-              child: Form(
-                key: _formKey,
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        const _BrandMark(),
-                        _ThemeToggle(
-                          isDarkMode: widget.isDarkMode,
-                          onToggle: widget.onToggleTheme,
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 28),
-                    Text(
-                      'Welcome to CampusLF',
-                      style: Theme.of(context).textTheme.headlineSmall,
-                    ),
-                    const SizedBox(height: 8),
-                    const Text(
-                      'Lost something? Found something? Let’s connect it at TMC.',
-                    ),
-                    const SizedBox(height: 28),
-                    if (_message != null)
-                      _Notice(text: _message!, success: true),
-                    if (_error != null) _Notice(text: _error!, success: false),
-                    if (_showVerifyAction)
-                      TextButton(
-                        onPressed: _busy
-                            ? null
-                            : () async {
-                                final result = await Navigator.of(context)
-                                    .push<_RegistrationResult>(
-                                      MaterialPageRoute(
-                                        builder: (_) => RegistrationScreen(
-                                          api: widget.api,
-                                          auth: widget.auth,
-                                          isDarkMode: widget.isDarkMode,
-                                          onToggleTheme: widget.onToggleTheme,
-                                          initialEmail: _email.text.trim(),
-                                        ),
-                                      ),
-                                    );
-                                if (!mounted || result == null) return;
-                                setState(() {
-                                  _email.text = result.email;
-                                  _error = null;
-                                  _showVerifyAction = false;
-                                  _message = result.message;
-                                });
-                              },
-                        child: const Text('Verify email or resend code'),
-                      ),
-                    TextFormField(
-                      controller: _email,
-                      keyboardType: TextInputType.emailAddress,
-                      textInputAction: TextInputAction.next,
-                      autofillHints: const [AutofillHints.email],
-                      decoration: const InputDecoration(
-                        labelText: 'TMC email *',
-                      ),
-                      validator: (value) {
-                        if (value == null || !value.contains('@')) {
-                          return 'Enter a valid email.';
-                        }
-                        return null;
-                      },
-                    ),
-                    const SizedBox(height: 14),
-                    TextFormField(
-                      controller: _password,
-                      obscureText: !_showPassword,
-                      autofillHints: const [AutofillHints.password],
-                      onFieldSubmitted: (_) => _login(),
-                      decoration: InputDecoration(
-                        labelText: 'Password *',
-                        suffixIcon: IconButton(
-                          tooltip: _showPassword
-                              ? 'Hide password'
-                              : 'Show password',
-                          onPressed: () =>
-                              setState(() => _showPassword = !_showPassword),
-                          icon: Icon(
-                            _showPassword
-                                ? Icons.visibility_off
-                                : Icons.visibility,
-                          ),
-                        ),
-                      ),
-                      validator: (value) => value == null || value.isEmpty
-                          ? 'Enter your password.'
-                          : null,
-                    ),
-                    Align(
-                      alignment: Alignment.centerRight,
-                      child: TextButton(
-                        onPressed: _busy ? null : _forgotPassword,
-                        child: const Text('Forgot password?'),
-                      ),
-                    ),
-                    const SizedBox(height: 20),
-                    FilledButton(
-                      onPressed: _busy ? null : _login,
-                      child: _busy
-                          ? const SizedBox.square(
-                              dimension: 20,
-                              child: CircularProgressIndicator(
-                                strokeWidth: 2,
-                                color: Colors.white,
-                              ),
-                            )
-                          : const Text('Log in'),
-                    ),
-                    const SizedBox(height: 10),
-                    OutlinedButton(
-                      onPressed: _busy ? null : _register,
-                      style: OutlinedButton.styleFrom(
-                        minimumSize: const Size.fromHeight(48),
-                      ),
-                      child: const Text('Create account'),
-                    ),
-                    const SizedBox(height: 18),
-                    Text(
-                      'TMC CampusLF helps members connect. We do not keep, guarantee, or insure items. Report valuables to the official TMC office.',
-                      textAlign: TextAlign.center,
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: Theme.of(context).colorScheme.onSurfaceVariant,
-                      ),
+              child: Container(
+                padding: const EdgeInsets.all(24),
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                    colors: [
+                      Theme.of(context).colorScheme.surface,
+                      Theme.of(context).brightness == Brightness.dark
+                          ? const Color(0xFF11134A)
+                          : const Color(0xFFF9F7FF),
+                    ],
+                  ),
+                  borderRadius: BorderRadius.circular(28),
+                  border: Border.all(
+                    color: Theme.of(context).colorScheme.primary
+                        .withValues(alpha: 0.13),
+                  ),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Theme.of(context).colorScheme.primary
+                          .withValues(alpha: 0.12),
+                      blurRadius: 28,
+                      offset: const Offset(0, 12),
                     ),
                   ],
+                ),
+                child: Form(
+                  key: _formKey,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          const _BrandMark(),
+                          _ThemeToggle(
+                            isDarkMode: widget.isDarkMode,
+                            onToggle: widget.onToggleTheme,
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 28),
+                      Text(
+                        'Welcome to CampusLF',
+                        style: Theme.of(context).textTheme.headlineSmall,
+                      ),
+                      const SizedBox(height: 8),
+                      const Text(
+                        'Lost something? Found something? Let’s connect it at TMC.',
+                      ),
+                      const SizedBox(height: 28),
+                      if (_message != null)
+                        _Notice(text: _message!, success: true),
+                      if (_error != null)
+                        _Notice(text: _error!, success: false),
+                      if (_showVerifyAction)
+                        TextButton(
+                          onPressed: _busy
+                              ? null
+                              : () async {
+                                  final result = await Navigator.of(context)
+                                      .push<_RegistrationResult>(
+                                        MaterialPageRoute(
+                                          builder: (_) => RegistrationScreen(
+                                            api: widget.api,
+                                            auth: widget.auth,
+                                            isDarkMode: widget.isDarkMode,
+                                            onToggleTheme: widget.onToggleTheme,
+                                            initialEmail: _email.text.trim(),
+                                          ),
+                                        ),
+                                      );
+                                  if (!mounted || result == null) return;
+                                  setState(() {
+                                    _email.text = result.email;
+                                    _error = null;
+                                    _showVerifyAction = false;
+                                    _message = result.message;
+                                  });
+                                },
+                          child: const Text('Verify email or resend code'),
+                        ),
+                      TextFormField(
+                        controller: _email,
+                        keyboardType: TextInputType.emailAddress,
+                        textInputAction: TextInputAction.next,
+                        autofillHints: const [AutofillHints.email],
+                        decoration: const InputDecoration(
+                          labelText: 'TMC email *',
+                        ),
+                        validator: (value) {
+                          if (value == null || !value.contains('@')) {
+                            return 'Enter a valid email.';
+                          }
+                          return null;
+                        },
+                      ),
+                      const SizedBox(height: 14),
+                      TextFormField(
+                        controller: _password,
+                        obscureText: !_showPassword,
+                        autofillHints: const [AutofillHints.password],
+                        onFieldSubmitted: (_) => _login(),
+                        decoration: InputDecoration(
+                          labelText: 'Password *',
+                          suffixIcon: IconButton(
+                            tooltip: _showPassword
+                                ? 'Hide password'
+                                : 'Show password',
+                            onPressed: () =>
+                                setState(() => _showPassword = !_showPassword),
+                            icon: Icon(
+                              _showPassword
+                                  ? Icons.visibility_off
+                                  : Icons.visibility,
+                            ),
+                          ),
+                        ),
+                        validator: (value) => value == null || value.isEmpty
+                            ? 'Enter your password.'
+                            : null,
+                      ),
+                      Align(
+                        alignment: Alignment.centerRight,
+                        child: TextButton(
+                          onPressed: _busy ? null : _forgotPassword,
+                          child: const Text('Forgot password?'),
+                        ),
+                      ),
+                      const SizedBox(height: 20),
+                      FilledButton(
+                        onPressed: _busy ? null : _login,
+                        child: _busy
+                            ? const SizedBox.square(
+                                dimension: 20,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                  color: Colors.white,
+                                ),
+                              )
+                            : const Text('Log in'),
+                      ),
+                      const SizedBox(height: 10),
+                      OutlinedButton(
+                        onPressed: _busy ? null : _register,
+                        style: OutlinedButton.styleFrom(
+                          minimumSize: const Size.fromHeight(48),
+                        ),
+                        child: const Text('Create account'),
+                      ),
+                      const SizedBox(height: 18),
+                      Text(
+                        'TMC CampusLF helps members connect. We do not keep, guarantee, or insure items. Report valuables to the official TMC office.',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: Theme.of(context).colorScheme.onSurfaceVariant,
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
               ),
             ),
@@ -969,7 +998,8 @@ class _Notice extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final successSurface = Theme.of(context).brightness == Brightness.dark
+    final dark = Theme.of(context).brightness == Brightness.dark;
+    final successSurface = dark
         ? CampusTheme.otherSurfaceDark
         : CampusTheme.otherSurface;
     final errorSurface = Theme.of(context).colorScheme.errorContainer;
@@ -984,7 +1014,7 @@ class _Notice extends StatelessWidget {
         text,
         style: TextStyle(
           color: success
-              ? CampusTheme.other
+              ? (dark ? CampusTheme.otherDark : CampusTheme.other)
               : Theme.of(context).colorScheme.onErrorContainer,
         ),
       ),
