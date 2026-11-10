@@ -1111,65 +1111,65 @@ class _CampusHomeScreenState extends State<CampusHomeScreen> {
             child: _FlexiblePostGrid(
               itemCount: posts.length,
               itemBuilder: (context, index) {
-                  final post = _postWithReaction(posts[index]);
-                  return _PostCard(
-                    post: post,
-                    compact: true,
-                    onTapAuthor: post.authorId == null
-                        ? () {}
-                        : () => _openUserProfile(post.authorId!),
-                    onOwnerEdit: () => _editOwnedPost(post),
-                    onOwnerDelete: () => _deleteOwnedPost(post),
-                    onRequestRetrieved: () => _requestPostRetrieved(post),
-                    onReport: () =>
-                        unawaited(_reportPost(context, widget.api, post)),
-                    onTap: () => showModalBottomSheet<void>(
-                      context: context,
-                      isScrollControlled: true,
-                      builder: (_) => _PostDetailSheet(
-                        api: widget.api,
-                        post: post,
-                        onOpenProfile: _openUserProfile,
-                        onClaimChanged: _refreshFeed,
-                        onReactionChanged: (reaction, count) {
-                          if (!mounted) return;
-                          setState(() {
-                            _reactionOverrides[post.id] = _ReactionState(
-                              count,
-                              reaction,
-                            );
-                          });
-                        },
-                      ),
+                final post = _postWithReaction(posts[index]);
+                return _PostCard(
+                  post: post,
+                  compact: true,
+                  onTapAuthor: post.authorId == null
+                      ? () {}
+                      : () => _openUserProfile(post.authorId!),
+                  onOwnerEdit: () => _editOwnedPost(post),
+                  onOwnerDelete: () => _deleteOwnedPost(post),
+                  onRequestRetrieved: () => _requestPostRetrieved(post),
+                  onReport: () =>
+                      unawaited(_reportPost(context, widget.api, post)),
+                  onTap: () => showModalBottomSheet<void>(
+                    context: context,
+                    isScrollControlled: true,
+                    builder: (_) => _PostDetailSheet(
+                      api: widget.api,
+                      post: post,
+                      onOpenProfile: _openUserProfile,
+                      onClaimChanged: _refreshFeed,
+                      onReactionChanged: (reaction, count) {
+                        if (!mounted) return;
+                        setState(() {
+                          _reactionOverrides[post.id] = _ReactionState(
+                            count,
+                            reaction,
+                          );
+                        });
+                      },
                     ),
-                    onReact: () => _reactToPost(post),
-                    onShare: () => _sharePost(post),
-                    onPrimaryAction: () {
-                      if (post.status == 'handover_pending') {
-                        _openHandoverInbox();
-                      } else {
-                        showModalBottomSheet<void>(
-                          context: context,
-                          isScrollControlled: true,
-                          builder: (_) => _PostDetailSheet(
-                            api: widget.api,
-                            post: post,
-                            onOpenProfile: _openUserProfile,
-                            onClaimChanged: _refreshFeed,
-                            onReactionChanged: (reaction, count) {
-                              if (!mounted) return;
-                              setState(() {
-                                _reactionOverrides[post.id] = _ReactionState(
-                                  count,
-                                  reaction,
-                                );
-                              });
-                            },
-                          ),
-                        );
-                      }
-                    },
-                  );
+                  ),
+                  onReact: () => _reactToPost(post),
+                  onShare: () => _sharePost(post),
+                  onPrimaryAction: () {
+                    if (post.status == 'handover_pending') {
+                      _openHandoverInbox();
+                    } else {
+                      showModalBottomSheet<void>(
+                        context: context,
+                        isScrollControlled: true,
+                        builder: (_) => _PostDetailSheet(
+                          api: widget.api,
+                          post: post,
+                          onOpenProfile: _openUserProfile,
+                          onClaimChanged: _refreshFeed,
+                          onReactionChanged: (reaction, count) {
+                            if (!mounted) return;
+                            setState(() {
+                              _reactionOverrides[post.id] = _ReactionState(
+                                count,
+                                reaction,
+                              );
+                            });
+                          },
+                        ),
+                      );
+                    }
+                  },
+                );
               },
             ),
           ),
@@ -1262,10 +1262,7 @@ class _CampusHomeScreenState extends State<CampusHomeScreen> {
 }
 
 class _FlexiblePostGrid extends StatelessWidget {
-  const _FlexiblePostGrid({
-    required this.itemCount,
-    required this.itemBuilder,
-  });
+  const _FlexiblePostGrid({required this.itemCount, required this.itemBuilder});
 
   final int itemCount;
   final Widget Function(BuildContext, int) itemBuilder;
@@ -1281,10 +1278,7 @@ class _FlexiblePostGrid extends StatelessWidget {
           runSpacing: spacing,
           children: [
             for (var index = 0; index < itemCount; index++)
-              SizedBox(
-                width: itemWidth,
-                child: itemBuilder(context, index),
-              ),
+              SizedBox(width: itemWidth, child: itemBuilder(context, index)),
           ],
         );
       },
@@ -1449,11 +1443,7 @@ class _PostCard extends StatelessWidget {
     return card;
   }
 
-  Widget _compactCard(
-    BuildContext context,
-    bool found,
-    Color tagColor,
-  ) {
+  Widget _compactCard(BuildContext context, bool found, Color tagColor) {
     final hasImage = post.images.any(
       (image) => image['url']?.isNotEmpty == true,
     );
@@ -1470,11 +1460,7 @@ class _PostCard extends StatelessWidget {
         _postAuthorHeader(context, dense: true),
         InkWell(
           onTap: onTap,
-          child: _compactPostDetails(
-            context,
-            found,
-            tagColor,
-          ),
+          child: _compactPostDetails(context, found, tagColor),
         ),
       ],
     );
@@ -1659,11 +1645,7 @@ class _PostCard extends StatelessWidget {
     );
   }
 
-  Widget _compactPostDetails(
-    BuildContext context,
-    bool found,
-    Color tagColor,
-  ) {
+  Widget _compactPostDetails(BuildContext context, bool found, Color tagColor) {
     final muted = Theme.of(context).colorScheme.onSurfaceVariant;
     return Padding(
       padding: const EdgeInsets.fromLTRB(7, 2, 7, 6),
@@ -3720,6 +3702,8 @@ class _CreatePostScreenState extends State<CreatePostScreen> {
   final _description = TextEditingController();
   final _question = TextEditingController();
   final _answer = TextEditingController();
+  final _categoryOther = TextEditingController();
+  final _locationOther = TextEditingController();
   final _questionControllers = <TextEditingController>[];
   final _answerControllers = <TextEditingController>[];
   final _photos = <XFile>[];
@@ -3730,6 +3714,8 @@ class _CreatePostScreenState extends State<CreatePostScreen> {
   String _custody = 'with_me';
   int? _categoryId;
   int? _locationId;
+  bool _categoryOtherSelected = false;
+  bool _locationOtherSelected = false;
   DateTime _eventDate = DateTime.now();
   bool _loading = true;
   bool _busy = false;
@@ -3750,6 +3736,8 @@ class _CreatePostScreenState extends State<CreatePostScreen> {
     _name.dispose();
     _color.dispose();
     _description.dispose();
+    _categoryOther.dispose();
+    _locationOther.dispose();
     for (final controller in _questionControllers) {
       controller.dispose();
     }
@@ -3830,8 +3818,16 @@ class _CreatePostScreenState extends State<CreatePostScreen> {
         _name.text = data['item_name'] as String? ?? '';
         _color.text = data['color'] as String? ?? '';
         _description.text = data['description'] as String? ?? '';
-        _categoryId = data['category_id'] as int?;
-        _locationId = data['location_id'] as int?;
+        _categoryOther.text = data['category_other'] as String? ?? '';
+        _locationOther.text = data['location_other'] as String? ?? '';
+        _categoryOtherSelected = _categoryOther.text.isNotEmpty;
+        _locationOtherSelected = _locationOther.text.isNotEmpty;
+        _categoryId = _categoryOtherSelected
+            ? null
+            : data['category_id'] as int?;
+        _locationId = _locationOtherSelected
+            ? null
+            : data['location_id'] as int?;
         _custody = data['custody'] as String? ?? 'with_me';
         _eventDate =
             DateTime.tryParse(data['event_date'] as String? ?? '') ??
@@ -3882,7 +3878,9 @@ class _CreatePostScreenState extends State<CreatePostScreen> {
       final selectedCategory = _categories.where(
         (item) => item['id'] == _categoryId,
       );
-      final category = selectedCategory.isEmpty
+      final category = _categoryOtherSelected
+          ? _categoryOther.text.trim()
+          : selectedCategory.isEmpty
           ? null
           : selectedCategory.first['name'] as String;
       final altText = [
@@ -3918,7 +3916,10 @@ class _CreatePostScreenState extends State<CreatePostScreen> {
 
   Future<void> _submit() async {
     if (_busy || _editDataFailed || !_formKey.currentState!.validate()) return;
-    if (_categoryId == null || _locationId == null) {
+    if ((!_categoryOtherSelected && _categoryId == null) ||
+        (_categoryOtherSelected && _categoryOther.text.trim().isEmpty) ||
+        (!_locationOtherSelected && _locationId == null) ||
+        (_locationOtherSelected && _locationOther.text.trim().isEmpty)) {
       setState(() => _error = 'Choose a category and place.');
       return;
     }
@@ -3933,7 +3934,9 @@ class _CreatePostScreenState extends State<CreatePostScreen> {
       _error = null;
     });
     try {
-      if (widget.initialPost == null) {
+      if (widget.initialPost == null &&
+          !_categoryOtherSelected &&
+          !_locationOtherSelected) {
         final duplicateCheck = await widget.api.dio.post<Map<String, dynamic>>(
           '/posts/similar',
           data: {
@@ -3993,9 +3996,15 @@ class _CreatePostScreenState extends State<CreatePostScreen> {
         'type': _type,
         'item_name': _name.text.trim(),
         'description': _description.text.trim(),
-        'category_id': _categoryId,
+        if (_categoryOtherSelected)
+          'category_other': _categoryOther.text.trim()
+        else
+          'category_id': _categoryId,
         'color': _color.text.trim(),
-        'location_id': _locationId,
+        if (_locationOtherSelected)
+          'location_other': _locationOther.text.trim()
+        else
+          'location_id': _locationId,
         'event_date':
             '${_eventDate.year.toString().padLeft(4, '0')}-${_eventDate.month.toString().padLeft(2, '0')}-${_eventDate.day.toString().padLeft(2, '0')}',
         if (_type == 'found') 'custody': _custody,
@@ -4165,18 +4174,34 @@ class _CreatePostScreenState extends State<CreatePostScreen> {
         ),
         const SizedBox(height: 12),
         DropdownButtonFormField<int>(
-          initialValue: _categoryId,
+          initialValue: _categoryOtherSelected ? -1 : _categoryId,
           decoration: const InputDecoration(labelText: 'Category *'),
-          items: _categories
-              .map(
-                (item) => DropdownMenuItem<int>(
-                  value: item['id'] as int,
-                  child: Text(item['name'] as String),
-                ),
-              )
-              .toList(),
-          onChanged: (value) => setState(() => _categoryId = value),
+          items: [
+            ..._categories.map(
+              (item) => DropdownMenuItem<int>(
+                value: item['id'] as int,
+                child: Text(item['name'] as String),
+              ),
+            ),
+            const DropdownMenuItem<int>(value: -1, child: Text('Other')),
+          ],
+          onChanged: (value) => setState(() {
+            _categoryOtherSelected = value == -1;
+            _categoryId = value == null || value == -1 ? null : value;
+            if (!_categoryOtherSelected) _categoryOther.clear();
+          }),
         ),
+        if (_categoryOtherSelected) ...[
+          const SizedBox(height: 8),
+          TextFormField(
+            controller: _categoryOther,
+            decoration: const InputDecoration(
+              labelText: 'If others, please specify:',
+            ),
+            validator: (value) =>
+                _categoryOtherSelected ? _required(value) : null,
+          ),
+        ],
         const SizedBox(height: 12),
         TextFormField(
           controller: _color,
@@ -4185,18 +4210,34 @@ class _CreatePostScreenState extends State<CreatePostScreen> {
         ),
         const SizedBox(height: 12),
         DropdownButtonFormField<int>(
-          initialValue: _locationId,
+          initialValue: _locationOtherSelected ? -1 : _locationId,
           decoration: const InputDecoration(labelText: 'Place *'),
-          items: _locations
-              .map(
-                (item) => DropdownMenuItem<int>(
-                  value: item['id'] as int,
-                  child: Text(item['name'] as String),
-                ),
-              )
-              .toList(),
-          onChanged: (value) => setState(() => _locationId = value),
+          items: [
+            ..._locations.map(
+              (item) => DropdownMenuItem<int>(
+                value: item['id'] as int,
+                child: Text(item['name'] as String),
+              ),
+            ),
+            const DropdownMenuItem<int>(value: -1, child: Text('Other')),
+          ],
+          onChanged: (value) => setState(() {
+            _locationOtherSelected = value == -1;
+            _locationId = value == null || value == -1 ? null : value;
+            if (!_locationOtherSelected) _locationOther.clear();
+          }),
         ),
+        if (_locationOtherSelected) ...[
+          const SizedBox(height: 8),
+          TextFormField(
+            controller: _locationOther,
+            decoration: const InputDecoration(
+              labelText: 'If others, please specify:',
+            ),
+            validator: (value) =>
+                _locationOtherSelected ? _required(value) : null,
+          ),
+        ],
         const SizedBox(height: 12),
         OutlinedButton.icon(
           onPressed: _selectDate,
@@ -7569,27 +7610,27 @@ class _PublicProfileScreenState extends State<PublicProfileScreen> {
                 itemBuilder: (context, index) {
                   final post = displayPosts[index];
                   return _PostCard(
-                      post: post,
-                      compact: true,
-                      onTapAuthor: () {},
-                      onOwnerEdit: () {},
-                      onOwnerDelete: () {},
-                      onRequestRetrieved: () {},
-                      onReport: () =>
-                          unawaited(_reportPost(context, widget.api, post)),
-                      onTap: () => _showPost(post),
-                      onReact: () => _react(post),
-                      onShare: () => SharePlus.instance.share(
-                        ShareParams(
-                          text:
-                              '${post.type.toUpperCase()} item: ${post.itemName}\n'
-                              '${post.description}\n'
-                              'Posted on CampusLF.',
-                          subject: 'CampusLF ${post.type} item',
-                        ),
+                    post: post,
+                    compact: true,
+                    onTapAuthor: () {},
+                    onOwnerEdit: () {},
+                    onOwnerDelete: () {},
+                    onRequestRetrieved: () {},
+                    onReport: () =>
+                        unawaited(_reportPost(context, widget.api, post)),
+                    onTap: () => _showPost(post),
+                    onReact: () => _react(post),
+                    onShare: () => SharePlus.instance.share(
+                      ShareParams(
+                        text:
+                            '${post.type.toUpperCase()} item: ${post.itemName}\n'
+                            '${post.description}\n'
+                            'Posted on CampusLF.',
+                        subject: 'CampusLF ${post.type} item',
                       ),
-                      onPrimaryAction: () => _showPost(post),
-                    );
+                    ),
+                    onPrimaryAction: () => _showPost(post),
+                  );
                 },
               );
             },
@@ -8066,62 +8107,62 @@ class _ProfileScreenState extends State<ProfileScreen> {
             itemBuilder: (context, index) {
               final post = _applyReaction(_myPosts[index], _reactionOverrides);
               return _PostCard(
-                  post: post,
-                  compact: true,
-                  onTapAuthor: () {},
-                  onOwnerEdit: () => unawaited(_editPost(post)),
-                  onOwnerDelete: () => unawaited(_deletePost(post)),
-                  onRequestRetrieved: () => unawaited(_requestRetrieved(post)),
-                  onReport: () =>
-                      unawaited(_reportPost(context, widget.api, post)),
-                  onTap: () => showModalBottomSheet<void>(
-                    context: context,
-                    isScrollControlled: true,
-                    builder: (_) => _PostDetailSheet(
-                      api: widget.api,
-                      post: post,
-                      onReactionChanged: (reaction, count) {
-                        if (!mounted) return;
-                        setState(() {
-                          _reactionOverrides[post.id] = _ReactionState(
-                            count,
-                            reaction,
-                          );
-                        });
-                      },
-                    ),
+                post: post,
+                compact: true,
+                onTapAuthor: () {},
+                onOwnerEdit: () => unawaited(_editPost(post)),
+                onOwnerDelete: () => unawaited(_deletePost(post)),
+                onRequestRetrieved: () => unawaited(_requestRetrieved(post)),
+                onReport: () =>
+                    unawaited(_reportPost(context, widget.api, post)),
+                onTap: () => showModalBottomSheet<void>(
+                  context: context,
+                  isScrollControlled: true,
+                  builder: (_) => _PostDetailSheet(
+                    api: widget.api,
+                    post: post,
+                    onReactionChanged: (reaction, count) {
+                      if (!mounted) return;
+                      setState(() {
+                        _reactionOverrides[post.id] = _ReactionState(
+                          count,
+                          reaction,
+                        );
+                      });
+                    },
                   ),
-                  onReact: () => unawaited(_toggleReaction(post)),
-                  onShare: () => SharePlus.instance.share(
-                    ShareParams(
-                      text:
-                          '${post.type.toUpperCase()} item: ${post.itemName}\n'
-                          '${post.description}\n'
-                          'Category: ${post.category} · ${post.location}\n'
-                          'Posted on CampusLF.',
-                      subject: 'CampusLF ${post.type} item',
-                    ),
+                ),
+                onReact: () => unawaited(_toggleReaction(post)),
+                onShare: () => SharePlus.instance.share(
+                  ShareParams(
+                    text:
+                        '${post.type.toUpperCase()} item: ${post.itemName}\n'
+                        '${post.description}\n'
+                        'Category: ${post.category} · ${post.location}\n'
+                        'Posted on CampusLF.',
+                    subject: 'CampusLF ${post.type} item',
                   ),
-                  onPrimaryAction: post.status == 'handover_pending'
-                      ? widget.onOpenHandovers
-                      : () => showModalBottomSheet<void>(
-                          context: context,
-                          isScrollControlled: true,
-                          builder: (_) => _PostDetailSheet(
-                            api: widget.api,
-                            post: post,
-                            onReactionChanged: (reaction, count) {
-                              if (!mounted) return;
-                              setState(() {
-                                _reactionOverrides[post.id] = _ReactionState(
-                                  count,
-                                  reaction,
-                                );
-                              });
-                            },
-                          ),
+                ),
+                onPrimaryAction: post.status == 'handover_pending'
+                    ? widget.onOpenHandovers
+                    : () => showModalBottomSheet<void>(
+                        context: context,
+                        isScrollControlled: true,
+                        builder: (_) => _PostDetailSheet(
+                          api: widget.api,
+                          post: post,
+                          onReactionChanged: (reaction, count) {
+                            if (!mounted) return;
+                            setState(() {
+                              _reactionOverrides[post.id] = _ReactionState(
+                                count,
+                                reaction,
+                              );
+                            });
+                          },
                         ),
-                );
+                      ),
+              );
             },
           ),
           if (_postsError != null)

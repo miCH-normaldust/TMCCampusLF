@@ -139,8 +139,10 @@ class PostController extends Controller
             'item_name' => $post->item_name,
             'description' => $post->description,
             'category_id' => $post->category_id,
+            'category_other' => $post->custom_category,
             'color' => $post->color,
             'location_id' => $post->location_id,
+            'location_other' => $post->custom_location,
             'event_date' => $post->event_date?->toDateString(),
             'custody' => $post->custody,
             'images' => $post->images->map(fn ($image): array => [
@@ -240,6 +242,23 @@ class PostController extends Controller
         return $normalized;
     }
 
+    /**
+     * @param  class-string<Category|Location>  $model
+     */
+    private function otherCatalogId(string $model): int
+    {
+        $other = $model::where('name', 'Other')->first();
+        if ($other) {
+            if (! $other->is_active) {
+                $other->update(['is_active' => true]);
+            }
+
+            return $other->id;
+        }
+
+        return $model::create(['name' => 'Other', 'is_active' => true])->id;
+    }
+
     public function store(StorePostRequest $request, ImageReencoder $images, TextMasker $masker, BlockedWordFilter $blockedWords, UserRestrictionService $restrictions): JsonResponse
     {
         $user = $request->user();
@@ -248,6 +267,14 @@ class PostController extends Controller
         abort_if($user->posts()->whereDate('created_at', today())->count() >= $dailyLimit, 429, 'Daily post limit reached.');
 
         $data = $request->validated();
+        $categoryOther = trim((string) ($data['category_other'] ?? ''));
+        $locationOther = trim((string) ($data['location_other'] ?? ''));
+        $data['category_id'] = $categoryOther !== ''
+            ? $this->otherCatalogId(Category::class)
+            : $data['category_id'];
+        $data['location_id'] = $locationOther !== ''
+            ? $this->otherCatalogId(Location::class)
+            : $data['location_id'];
         $blockedWords->assertAllowed($data['item_name'], $data['description']);
         abort_unless(Category::whereKey($data['category_id'])->where('is_active', true)->exists(), 422, 'Category is unavailable.');
         abort_unless(Location::whereKey($data['location_id'])->where('is_active', true)->exists(), 422, 'Location is unavailable.');
@@ -260,6 +287,8 @@ class PostController extends Controller
             'type', 'item_name', 'description', 'category_id', 'color',
             'location_id', 'event_date', 'custody', 'expires_at',
         ]));
+        $postData['custom_category'] = $categoryOther !== '' ? $categoryOther : null;
+        $postData['custom_location'] = $locationOther !== '' ? $locationOther : null;
         $photos = $this->normalizePhotos($request);
         $post = DB::transaction(function () use ($data, $postData, $user, $images, $masker, $photos): Post {
             $post = $user->posts()->create($postData);
@@ -349,12 +378,22 @@ class PostController extends Controller
         $restrictions->assertCanPost($request->user(), $data['type']);
         $photos = $this->normalizePhotos($request);
         abort_if($post->images()->count() + count($photos) > 5, 422, 'A post can include at most five photos.');
+        $categoryOther = trim((string) ($data['category_other'] ?? ''));
+        $locationOther = trim((string) ($data['location_other'] ?? ''));
+        $data['category_id'] = $categoryOther !== ''
+            ? $this->otherCatalogId(Category::class)
+            : $data['category_id'];
+        $data['location_id'] = $locationOther !== ''
+            ? $this->otherCatalogId(Location::class)
+            : $data['location_id'];
         abort_unless(Category::whereKey($data['category_id'])->where('is_active', true)->exists(), 422, 'Category is unavailable.');
         abort_unless(Location::whereKey($data['location_id'])->where('is_active', true)->exists(), 422, 'Location is unavailable.');
         $postData = array_intersect_key($data, array_flip([
             'type', 'item_name', 'description', 'category_id', 'color',
             'location_id', 'event_date', 'custody',
         ]));
+        $postData['custom_category'] = $categoryOther !== '' ? $categoryOther : null;
+        $postData['custom_location'] = $locationOther !== '' ? $locationOther : null;
         $postData['item_name'] = $masker->mask($postData['item_name']);
         $postData['description'] = $masker->mask($postData['description']);
 

@@ -1,5 +1,6 @@
 param(
-    [string]$DeviceId
+    [string]$DeviceId,
+    [string]$WirelessAddress
 )
 
 $ErrorActionPreference = 'Stop'
@@ -12,6 +13,15 @@ if (-not (Test-Path $adb)) {
 }
 
 Set-Location $projectRoot
+if ($WirelessAddress) {
+    & $adb connect $WirelessAddress
+    if ($LASTEXITCODE -ne 0) {
+        throw "Could not connect to wireless Android device at $WirelessAddress. Pair it from Android Studio or Android Wireless debugging first."
+    }
+    if (-not $DeviceId) {
+        $DeviceId = $WirelessAddress
+    }
+}
 $deviceRows = & $adb devices | Select-String -Pattern '^\S+\s+device$'
 $availableDevices = @($deviceRows | ForEach-Object { ($_ -split '\s+')[0] })
 if ($DeviceId) {

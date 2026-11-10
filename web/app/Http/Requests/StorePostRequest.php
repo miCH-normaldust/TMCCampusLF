@@ -18,9 +18,11 @@ class StorePostRequest extends FormRequest
             'type' => ['required', Rule::in(['lost', 'found'])],
             'item_name' => ['required', 'string', 'max:150'],
             'description' => ['required', 'string', 'max:3000'],
-            'category_id' => ['required', 'exists:categories,id'],
+            'category_id' => ['nullable', 'required_without:category_other', 'integer', 'exists:categories,id'],
+            'category_other' => ['nullable', 'required_without:category_id', 'string', 'max:100'],
             'color' => ['required', 'string', 'max:50'],
-            'location_id' => ['required', 'exists:locations,id'],
+            'location_id' => ['nullable', 'required_without:location_other', 'integer', 'exists:locations,id'],
+            'location_other' => ['nullable', 'required_without:location_id', 'string', 'max:150'],
             'event_date' => ['required', 'date', 'before_or_equal:today'],
             'custody' => [
                 Rule::prohibitedIf($this->input('type') === 'lost'),

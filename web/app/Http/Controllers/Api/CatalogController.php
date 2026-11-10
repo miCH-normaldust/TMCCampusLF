@@ -12,8 +12,8 @@ class CatalogController extends Controller
     public function index(): JsonResponse
     {
         return response()->json([
-            'categories' => Category::where('is_active', true)->orderBy('name')->get(['id', 'name']),
-            'locations' => Location::where('is_active', true)->orderBy('name')->get(['id', 'name']),
+            'categories' => Category::where('is_active', true)->where('name', '!=', 'Other')->orderBy('name')->get(['id', 'name']),
+            'locations' => Location::where('is_active', true)->where('name', '!=', 'Other')->orderBy('name')->get(['id', 'name']),
         ]);
     }
 }
