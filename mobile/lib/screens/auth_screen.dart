@@ -10,16 +10,12 @@ class AuthScreen extends StatefulWidget {
   const AuthScreen({
     required this.api,
     required this.auth,
-    required this.isDarkMode,
-    required this.onToggleTheme,
     required this.onSignedIn,
     super.key,
   });
 
   final ApiClient api;
   final AuthService auth;
-  final bool isDarkMode;
-  final VoidCallback onToggleTheme;
   final void Function(String firstName) onSignedIn;
 
   @override
@@ -76,12 +72,7 @@ class _AuthScreenState extends State<AuthScreen> {
   Future<void> _register() async {
     final result = await Navigator.of(context).push<_RegistrationResult>(
       MaterialPageRoute(
-        builder: (_) => RegistrationScreen(
-          api: widget.api,
-          auth: widget.auth,
-          isDarkMode: widget.isDarkMode,
-          onToggleTheme: widget.onToggleTheme,
-        ),
+        builder: (_) => RegistrationScreen(api: widget.api, auth: widget.auth),
       ),
     );
     if (result == null || !mounted) return;
@@ -95,12 +86,8 @@ class _AuthScreenState extends State<AuthScreen> {
   Future<void> _forgotPassword() async {
     final message = await Navigator.of(context).push<String>(
       MaterialPageRoute(
-        builder: (_) => ForgotPasswordScreen(
-          api: widget.api,
-          auth: widget.auth,
-          isDarkMode: widget.isDarkMode,
-          onToggleTheme: widget.onToggleTheme,
-        ),
+        builder: (_) =>
+            ForgotPasswordScreen(api: widget.api, auth: widget.auth),
       ),
     );
     if (message != null && mounted) {
@@ -128,9 +115,7 @@ class _AuthScreenState extends State<AuthScreen> {
                     end: Alignment.bottomRight,
                     colors: [
                       Theme.of(context).colorScheme.surface,
-                      Theme.of(context).brightness == Brightness.dark
-                          ? const Color(0xFF11134A)
-                          : const Color(0xFFF9F7FF),
+                      CampusTheme.sky,
                     ],
                   ),
                   borderRadius: BorderRadius.circular(28),
@@ -153,14 +138,8 @@ class _AuthScreenState extends State<AuthScreen> {
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
                       Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          const _BrandMark(),
-                          _ThemeToggle(
-                            isDarkMode: widget.isDarkMode,
-                            onToggle: widget.onToggleTheme,
-                          ),
-                        ],
+                        mainAxisAlignment: MainAxisAlignment.start,
+                        children: [const _BrandMark()],
                       ),
                       const SizedBox(height: 28),
                       Text(
@@ -187,8 +166,6 @@ class _AuthScreenState extends State<AuthScreen> {
                                           builder: (_) => RegistrationScreen(
                                             api: widget.api,
                                             auth: widget.auth,
-                                            isDarkMode: widget.isDarkMode,
-                                            onToggleTheme: widget.onToggleTheme,
                                             initialEmail: _email.text.trim(),
                                           ),
                                         ),
@@ -296,15 +273,11 @@ class ForgotPasswordScreen extends StatefulWidget {
   const ForgotPasswordScreen({
     required this.api,
     required this.auth,
-    required this.isDarkMode,
-    required this.onToggleTheme,
     super.key,
   });
 
   final ApiClient api;
   final AuthService auth;
-  final bool isDarkMode;
-  final VoidCallback onToggleTheme;
 
   @override
   State<ForgotPasswordScreen> createState() => _ForgotPasswordScreenState();
@@ -431,15 +404,7 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
   Widget build(BuildContext context) {
     final titles = ['Reset password', 'Verify code', 'Choose new password'];
     return Scaffold(
-      appBar: AppBar(
-        title: Text(titles[_step]),
-        actions: [
-          _ThemeToggle(
-            isDarkMode: widget.isDarkMode,
-            onToggle: widget.onToggleTheme,
-          ),
-        ],
-      ),
+      appBar: AppBar(title: Text(titles[_step])),
       body: SafeArea(
         child: ListView(
           padding: const EdgeInsets.all(20),
@@ -519,16 +484,12 @@ class RegistrationScreen extends StatefulWidget {
   const RegistrationScreen({
     required this.api,
     required this.auth,
-    required this.isDarkMode,
-    required this.onToggleTheme,
     this.initialEmail,
     super.key,
   });
 
   final ApiClient api;
   final AuthService auth;
-  final bool isDarkMode;
-  final VoidCallback onToggleTheme;
   final String? initialEmail;
 
   @override
@@ -544,15 +505,11 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
   final _userTypeOther = TextEditingController();
   final _password = TextEditingController();
   final _confirm = TextEditingController();
-  final _captchaAnswer = TextEditingController();
   final _otp = TextEditingController();
   String _userType = 'student';
   String _department = 'CCS';
-  String _captchaQuestion = 'Loading security check…';
-  String _captchaToken = '';
   bool _termsAccepted = false;
   bool _busy = false;
-  bool _captchaLoading = false;
   bool _otpSent = false;
   bool _localOtpFallback = false;
   bool _showPassword = false;
@@ -566,8 +523,6 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
     if (widget.initialEmail != null) {
       _email.text = widget.initialEmail!;
       _otpSent = true;
-    } else {
-      _loadCaptcha();
     }
   }
 
@@ -581,7 +536,6 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
       _userTypeOther,
       _password,
       _confirm,
-      _captchaAnswer,
       _otp,
     ]) {
       controller.dispose();
@@ -589,44 +543,8 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
     super.dispose();
   }
 
-  Future<void> _loadCaptcha({bool clearError = true}) async {
-    if (_captchaLoading) return;
-    setState(() {
-      _captchaLoading = true;
-      _captchaToken = '';
-      _captchaQuestion = 'Loading security check…';
-      _captchaAnswer.clear();
-      if (clearError) _error = null;
-    });
-    try {
-      final challenge = await widget.auth.captcha();
-      if (mounted) {
-        setState(() {
-          _captchaQuestion = challenge['question']!;
-          _captchaToken = challenge['token']!;
-        });
-      }
-    } on DioException catch (error) {
-      if (mounted) {
-        setState(() {
-          _captchaQuestion = 'Unavailable — tap refresh';
-          _error = widget.api.errorMessage(error);
-        });
-      }
-    } finally {
-      if (mounted) setState(() => _captchaLoading = false);
-    }
-  }
-
   Future<void> _submit() async {
     if (_busy) return;
-    if (!_otpSent && (_captchaLoading || _captchaToken.isEmpty)) {
-      setState(
-        () => _error =
-            'The security check is not ready. Tap refresh and try again.',
-      );
-      return;
-    }
     if (!_otpSent && !_formKey.currentState!.validate()) return;
     if (_otpSent && _otp.text.trim().length != 6) {
       setState(
@@ -646,7 +564,6 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
       _error = null;
       _message = null;
     });
-    var refreshCaptcha = false;
     try {
       if (!_otpSent) {
         final message = await widget.auth.register(
@@ -663,8 +580,6 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
             'password': _password.text,
             'password_confirmation': _confirm.text,
           },
-          captchaToken: _captchaToken,
-          captchaAnswer: _captchaAnswer.text.trim(),
         );
         if (!mounted) return;
         setState(() {
@@ -684,15 +599,11 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
       }
     } on DioException catch (error) {
       if (mounted) setState(() => _error = widget.api.errorMessage(error));
-      refreshCaptcha = !_otpSent;
     } catch (error) {
       if (mounted) setState(() => _error = error.toString());
-      refreshCaptcha = !_otpSent;
     } finally {
       if (mounted) setState(() => _busy = false);
     }
-    if (!mounted) return;
-    if (refreshCaptcha) await _loadCaptcha(clearError: false);
   }
 
   String? _required(String? value) =>
@@ -707,12 +618,6 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
     return Scaffold(
       appBar: AppBar(
         title: Text(_otpSent ? 'Verify your email' : 'Create account'),
-        actions: [
-          _ThemeToggle(
-            isDarkMode: widget.isDarkMode,
-            onToggle: widget.onToggleTheme,
-          ),
-        ],
       ),
       body: SafeArea(
         child: Form(
@@ -896,25 +801,6 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
                       : 'Passwords do not match.',
                 ),
                 const SizedBox(height: 12),
-                TextFormField(
-                  controller: _captchaAnswer,
-                  keyboardType: TextInputType.number,
-                  maxLength: 2,
-                  decoration: InputDecoration(
-                    labelText: 'Security check: $_captchaQuestion *',
-                    suffixIcon: IconButton(
-                      tooltip: 'Refresh security check',
-                      onPressed: _busy || _captchaLoading ? null : _loadCaptcha,
-                      icon: _captchaLoading
-                          ? const SizedBox.square(
-                              dimension: 18,
-                              child: CircularProgressIndicator(strokeWidth: 2),
-                            )
-                          : const Icon(Icons.refresh),
-                    ),
-                  ),
-                  validator: _required,
-                ),
                 CheckboxListTile(
                   contentPadding: EdgeInsets.zero,
                   value: _termsAccepted,
@@ -971,22 +857,6 @@ class _BrandMark extends StatelessWidget {
           style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
         ),
       ],
-    );
-  }
-}
-
-class _ThemeToggle extends StatelessWidget {
-  const _ThemeToggle({required this.isDarkMode, required this.onToggle});
-
-  final bool isDarkMode;
-  final VoidCallback onToggle;
-
-  @override
-  Widget build(BuildContext context) {
-    return IconButton(
-      tooltip: isDarkMode ? 'Switch to light mode' : 'Switch to dark mode',
-      onPressed: onToggle,
-      icon: Icon(isDarkMode ? Icons.light_mode : Icons.dark_mode),
     );
   }
 }

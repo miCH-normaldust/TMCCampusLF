@@ -762,7 +762,7 @@ class EngagementWorkflowTest extends TestCase
         $this->assertDatabaseCount('lost_sightings', 2);
     }
 
-    public function test_owner_post_photos_are_hidden_until_the_matching_evidence_is_approved(): void
+    public function test_all_users_can_view_owner_post_photos_without_evidence_approval(): void
     {
         Storage::fake('public');
         [$owner, $member, $category, $location] = $this->createParticipants();
@@ -774,22 +774,10 @@ class EngagementWorkflowTest extends TestCase
             'path' => $foundPath,
             'alt_text' => 'Found item',
         ]);
-        $claim = ClaimRequest::create([
-            'post_id' => $foundPost->id,
-            'claimant_id' => $member->id,
-            'answers' => ['a private answer'],
-            'attempt_no' => 1,
-            'status' => 'approved',
-            'author_decision' => 'pending',
-        ]);
-
-        Sanctum::actingAs($member);
         $this->getJson("/api/v1/posts/{$foundPost->id}")
             ->assertOk()
-            ->assertJsonPath('data.images', []);
-        $claim->update(['author_decision' => 'approved']);
+            ->assertJsonPath('data.images.0.alt_text', 'Found item');
         $foundImageUrl = $this->getJson("/api/v1/posts/{$foundPost->id}")
-            ->assertOk()
             ->json('data.images.0.url');
         $this->assertIsString($foundImageUrl);
         $this->withServerVariables(['HTTP_HOST' => 'phone.local'])
@@ -805,21 +793,9 @@ class EngagementWorkflowTest extends TestCase
             'path' => $lostPath,
             'alt_text' => 'Lost item',
         ]);
-        $sighting = LostSighting::create([
-            'post_id' => $lostPost->id,
-            'user_id' => $member->id,
-            'answer' => 'yes',
-            'evidence_text' => 'I found the item.',
-            'author_decision' => 'pending',
-            'admin_decision' => 'pending',
-        ]);
         $this->getJson("/api/v1/posts/{$lostPost->id}")
             ->assertOk()
-            ->assertJsonPath('data.images', []);
-        $sighting->update(['author_decision' => 'approved']);
-        $this->getJson("/api/v1/posts/{$lostPost->id}")
-            ->assertOk()
-            ->assertJsonCount(1, 'data.images');
+            ->assertJsonPath('data.images.0.alt_text', 'Lost item');
     }
 
     public function test_comments_support_one_level_replies_and_reactions_are_heart_toggles(): void

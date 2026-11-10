@@ -20,25 +20,16 @@
         <nav class="nav" aria-label="Admin navigation">
             @php
                 $pinnedNavigation = [
-                    ['label' => 'Home', 'icon' => '⌂', 'route' => 'admin.dashboard', 'active' => 'admin.dashboard'],
+                    ['label' => 'Dashboard', 'icon' => '⌂', 'route' => 'admin.dashboard', 'active' => 'admin.dashboard'],
                     ['label' => 'Community Feed', 'icon' => '▤', 'route' => 'admin.community-feed.index', 'active' => 'admin.community-feed.*'],
                 ];
-                $navigationGroups = [
-                    'Transactions' => [
-                        ['label' => 'Found Item Claims', 'icon' => '✓', 'route' => 'admin.claims.index', 'active' => 'admin.claims.*', 'count' => 'claims'],
-                        ['label' => 'Lost Item Proofs', 'icon' => '⌕', 'route' => 'admin.sightings.index', 'active' => 'admin.sightings.*', 'count' => 'sightings'],
-                        ['label' => 'Handovers', 'icon' => '⇄', 'route' => 'admin.handovers.index', 'active' => 'admin.handovers.index', 'count' => 'handovers'],
-                        ['label' => 'Handover History', 'icon' => '◷', 'route' => 'admin.handovers.history', 'active' => 'admin.handovers.history*'],
-                    ],
-                    'Monitoring and Maintenance' => [
+                $monitoringLinks = [
                         ['label' => 'Users', 'icon' => '♙', 'route' => 'admin.users.index', 'active' => 'admin.users.*'],
                         ['label' => 'Reports', 'icon' => '⚑', 'route' => 'admin.reports.index', 'active' => 'admin.reports.*', 'count' => 'reports'],
                         ['label' => 'Chats', 'icon' => '▣', 'route' => 'admin.chats.index', 'active' => 'admin.chats.*'],
                         ['label' => 'Feedback', 'icon' => '✉', 'route' => 'admin.feedback.index', 'active' => 'admin.feedback.*', 'count' => 'feedback'],
-                        ['label' => 'Activity', 'icon' => '◷', 'route' => 'admin.activity.index', 'active' => 'admin.activity.*'],
                         ['label' => 'Audit Trail', 'icon' => '▣', 'route' => 'admin.audit.index', 'active' => 'admin.audit.*'],
                         ['label' => 'Settings', 'icon' => '⚙', 'route' => 'admin.settings.index', 'active' => 'admin.settings.*'],
-                    ],
                 ];
             @endphp
             @foreach ($pinnedNavigation as $item)
@@ -54,9 +45,20 @@
                     @endif
                 </a>
             @endforeach
-            @foreach ($navigationGroups as $group => $items)
-                <div class="nav-group-label">{{ $group }}</div>
-                @foreach ($items as $item)
+            <a href="{{ route('admin.activity.index') }}"
+               class="nav-link {{ request()->routeIs('admin.activity.*') ? 'active' : '' }}"
+               title="Activity" aria-label="Activity"
+               @if (request()->routeIs('admin.activity.*')) aria-current="page" @endif>
+                <span class="nav-icon" aria-hidden="true">◷</span>
+                <span class="nav-label">Activity</span>
+            </a>
+            <details class="nav-dropdown" @if (request()->routeIs('admin.users.*', 'admin.reports.*', 'admin.chats.*', 'admin.feedback.*', 'admin.audit.*', 'admin.settings.*')) open @endif>
+                <summary class="nav-link" title="Monitoring and Maintenance" aria-label="Monitoring and Maintenance">
+                    <span class="nav-icon" aria-hidden="true">⚙</span>
+                    <span class="nav-label">Monitoring and Maintenance</span>
+                </summary>
+                <div class="nav-dropdown-links">
+                @foreach ($monitoringLinks as $item)
                     <a href="{{ route($item['route']) }}"
                        class="nav-link {{ request()->routeIs($item['active']) ? 'active' : '' }}"
                        title="{{ $item['label'] }}"
@@ -69,7 +71,8 @@
                         @endif
                     </a>
                 @endforeach
-            @endforeach
+                </div>
+            </details>
         </nav>
     </aside>
     <div class="content">
@@ -79,7 +82,6 @@
                 <strong>Administration</strong>
             </div>
             <div class="top-actions">
-                <button class="button secondary theme-toggle" type="button" aria-pressed="false">Dark mode</button>
                 <form method="post" action="{{ route('admin.logout') }}">@csrf<button class="button secondary" type="submit">Log out</button></form>
             </div>
         </header>
@@ -92,24 +94,31 @@
 </div>
 <script>
     (() => {
+        document.querySelectorAll('form[data-auto-filter]').forEach(form => {
+            let searchTimer;
+            const submit = () => {
+                window.clearTimeout(searchTimer);
+                form.requestSubmit();
+            };
+
+            form.querySelectorAll('select, input[type="date"]').forEach(control => {
+                control.addEventListener('change', submit);
+            });
+            form.querySelectorAll('input[name="search"]').forEach(input => {
+                input.addEventListener('input', () => {
+                    window.clearTimeout(searchTimer);
+                    searchTimer = window.setTimeout(() => form.requestSubmit(), 300);
+                });
+            });
+        });
+    })();
+</script>
+<script>
+    (() => {
         const shell = document.querySelector('.shell');
         const toggle = document.querySelector('.drawer-toggle');
         const mobileToggle = document.querySelector('.mobile-drawer-toggle');
-        const themeToggle = document.querySelector('.theme-toggle');
-        if (!shell || !toggle || !mobileToggle || !themeToggle) return;
-
-        const savedTheme = localStorage.getItem('campuslf-admin-theme');
-        const applyTheme = dark => {
-            document.body.dataset.theme = dark ? 'dark' : 'light';
-            themeToggle.textContent = dark ? 'Light mode' : 'Dark mode';
-            themeToggle.setAttribute('aria-pressed', String(dark));
-        };
-        applyTheme(savedTheme === 'dark');
-        themeToggle.addEventListener('click', () => {
-            const dark = document.body.dataset.theme !== 'dark';
-            localStorage.setItem('campuslf-admin-theme', dark ? 'dark' : 'light');
-            applyTheme(dark);
-        });
+        if (!shell || !toggle || !mobileToggle) return;
 
         if (localStorage.getItem('campuslf-admin-drawer') === 'collapsed') {
             shell.classList.add('drawer-collapsed');

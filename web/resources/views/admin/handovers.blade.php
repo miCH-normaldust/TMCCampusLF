@@ -13,7 +13,7 @@
     </div>
 
     <section class="section card">
-        <form class="filter-form compact-filter" method="get" action="{{ route('admin.handovers.index') }}">
+        <form class="filter-form compact-filter" method="get" action="{{ route('admin.handovers.index') }}" data-auto-filter>
             <label>Status
                 <select name="status">
                     <option value="" @selected($status === '')>All active handovers</option>
@@ -35,8 +35,6 @@
                     <option value="found" @selected($type === 'found')>Found</option>
                 </select>
             </label>
-            <button class="button" type="submit">Filter</button>
-            <a class="button secondary" href="{{ route('admin.handovers.index') }}">Clear</a>
         </form>
         <div class="table-wrap">
             <table>
@@ -61,7 +59,9 @@
                         </td>
                         <td>{{ ucfirst($post?->type ?? 'unknown') }}</td>
                         <td>
-                            @if (in_array($handover->status, ['awaiting_admin', 'awaiting_participants'], true))
+                            @if ($handover->status === 'awaiting_admin')
+                                Awaiting administrator review
+                            @elseif ($handover->status === 'awaiting_participants')
                                 Awaiting participant agreements
                             @elseif ($handover->status === 'awaiting_schedule')
                                 Both participants agreed

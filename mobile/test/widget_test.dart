@@ -34,23 +34,45 @@ void main() {
     expect(post.toString(), isNot(contains('answer')));
   });
 
-  test('resolves protected post image paths against the configured API origin', () {
+  test(
+    'resolves protected post image paths against the configured API origin',
+    () {
+      final post = CampusPost.fromJson({
+        'id': 8,
+        'images': [
+          {
+            'url':
+                '/api/v1/media?path=posts%2Fitem.jpg&expires=123&signature=abc',
+            'alt_text': 'Item photo',
+          },
+        ],
+      });
+
+      final imageUri = Uri.parse(post.images.single['url']!);
+      final apiUri = Uri.parse(AppConfig.apiBaseUrl);
+
+      expect(imageUri.hasScheme, isTrue);
+      expect(imageUri.origin, apiUri.origin);
+      expect(imageUri.path, '/api/v1/media');
+      expect(imageUri.queryParameters['signature'], 'abc');
+    },
+  );
+
+  test('keeps post owner photos available on other members posts', () {
     final post = CampusPost.fromJson({
-      'id': 8,
+      'id': 9,
+      'is_mine': false,
+      'author_profile_picture_url': '/storage/profiles/member.jpg',
       'images': [
-        {
-          'url': '/api/v1/media?path=posts%2Fitem.jpg&expires=123&signature=abc',
-          'alt_text': 'Item photo',
-        },
+        {'url': '/storage/posts/item-1.jpg'},
+        {'url': '/storage/posts/item-2.jpg'},
       ],
     });
 
-    final imageUri = Uri.parse(post.images.single['url']!);
-    final apiUri = Uri.parse(AppConfig.apiBaseUrl);
-
-    expect(imageUri.hasScheme, isTrue);
-    expect(imageUri.origin, apiUri.origin);
-    expect(imageUri.path, '/api/v1/media');
-    expect(imageUri.queryParameters['signature'], 'abc');
+    expect(
+      Uri.parse(post.authorProfilePictureUrl!).origin,
+      Uri.parse(AppConfig.apiBaseUrl).origin,
+    );
+    expect(post.images, hasLength(2));
   });
 }

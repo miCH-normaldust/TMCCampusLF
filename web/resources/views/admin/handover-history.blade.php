@@ -14,7 +14,7 @@
     </div>
 
     <section class="card">
-        <form class="filter-form compact-filter" method="get" action="{{ route('admin.handovers.history') }}">
+        <form class="filter-form compact-filter" method="get" action="{{ route('admin.handovers.history') }}" data-auto-filter>
             <label>Status
                 <select name="status">
                     <option value="" @selected($status === '')>All outcomes</option>
@@ -29,8 +29,6 @@
                     <option value="found" @selected($type === 'found')>Found</option>
                 </select>
             </label>
-            <button class="button" type="submit">Filter</button>
-            <a class="button secondary" href="{{ route('admin.handovers.history') }}">Clear</a>
         </form>
     </section>
 

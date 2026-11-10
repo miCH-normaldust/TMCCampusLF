@@ -9,6 +9,7 @@ use App\Models\Post;
 use App\Models\User;
 use App\Services\ImageReencoder;
 use App\Services\TextMasker;
+use App\Services\UserRestrictionService;
 use App\Support\PublicMediaUrl;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -56,9 +57,10 @@ class InteractionController extends Controller
         return response()->json($comments);
     }
 
-    public function comment(Request $request, Post $post, TextMasker $masker): JsonResponse
+    public function comment(Request $request, Post $post, TextMasker $masker, UserRestrictionService $restrictions): JsonResponse
     {
         abort_unless(in_array($post->status, ['active', 'claim_pending', 'handover_pending'], true), 404);
+        $restrictions->assertCanComment($request->user());
         $data = $request->validate([
             'body' => ['required', 'string', 'max:2000'],
             'parent_id' => ['nullable', 'integer', 'exists:comments,id'],
@@ -94,7 +96,7 @@ class InteractionController extends Controller
         return response()->json(['message' => 'Comment deleted.']);
     }
 
-    public function react(Request $request, Post $post): JsonResponse
+    public function react(Request $request, Post $post, UserRestrictionService $restrictions): JsonResponse
     {
         $data = $request->validate(['type' => ['required', 'in:like,none']]);
         if ($data['type'] === 'none') {
@@ -106,6 +108,7 @@ class InteractionController extends Controller
             ]);
         }
 
+        $restrictions->assertCanReact($request->user());
         $reaction = $post->reactions()->updateOrCreate(
             ['user_id' => $request->user()->id],
             ['type' => $data['type']],

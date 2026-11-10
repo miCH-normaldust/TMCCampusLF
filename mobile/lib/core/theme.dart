@@ -1,89 +1,78 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 class CampusTheme {
-  static const primary = Color(0xFF7C44BC);
-  static const primaryDark = Color(0xFF3F278A);
-  static const found = Color(0xFF287C91);
-  static const foundDark = Color(0xFF96CCF9);
-  static const foundSurface = Color(0xFFD8F1F5);
-  static const foundSurfaceDark = Color(0xFF173C55);
-  static const lost = Color(0xFF9A477F);
-  static const lostDark = Color(0xFFB48CF2);
-  static const lostSurface = Color(0xFFF4E2F2);
-  static const lostSurfaceDark = Color(0xFF48264E);
-  static const other = Color(0xFF3F56AE);
-  static const otherDark = Color(0xFFC8DEF8);
-  static const otherSurface = Color(0xFFE0E7FC);
-  static const otherSurfaceDark = Color(0xFF292C69);
-  static const background = Color(0xFFF0F1FC);
-  static const header = Color(0xFFE4E5FB);
-  static const border = Color(0xFFD2D4F2);
+  static const sky = Color(0xFFC9E9FF);
+  static const blue = Color(0xFF9AC9E6);
+  static const sand = Color(0xFFE9DFCF);
+  static const cream = Color(0xFFFFF8EE);
+  static const slate = Color(0xFF3E5663);
 
-  static ThemeData build({bool dark = false}) {
-    final surface = dark ? const Color(0xFF141747) : const Color(0xFFFFFEFF);
-    final pageBackground = dark ? const Color(0xFF060941) : background;
-    final foreground = dark ? const Color(0xFFF3F2FF) : const Color(0xFF22234E);
-    final outline = dark ? const Color(0xFF3539A4) : border;
+  static const primary = slate;
+  static const primaryDark = slate;
+  static const found = slate;
+  static const foundDark = slate;
+  static const foundSurface = sky;
+  static const foundSurfaceDark = sky;
+  static const lost = slate;
+  static const lostDark = slate;
+  static const lostSurface = cream;
+  static const lostSurfaceDark = cream;
+  static const other = slate;
+  static const otherDark = slate;
+  static const otherSurface = sand;
+  static const otherSurfaceDark = sand;
+  static const background = cream;
+  static const header = sky;
+  static const border = blue;
+
+  static ThemeData build() {
+    const surface = cream;
+    const foreground = slate;
+    const outline = border;
     final colors =
         ColorScheme.fromSeed(
-          brightness: dark ? Brightness.dark : Brightness.light,
+          brightness: Brightness.light,
           seedColor: primary,
-          primary: dark ? const Color(0xFFB48CF2) : primary,
-          secondary: dark ? const Color(0xFF96CCF9) : const Color(0xFF3F56AE),
-          tertiary: const Color(0xFF64B4C4),
+          primary: primary,
+          secondary: blue,
+          tertiary: sand,
           surface: surface,
-          error: lost,
+          error: primaryDark,
         ).copyWith(
-          onPrimary: dark ? const Color(0xFF211043) : Colors.white,
-          primaryContainer: dark
-              ? const Color(0xFF3F278A)
-              : const Color(0xFFEBDDFA),
-          onPrimaryContainer: dark
-              ? const Color(0xFFF0E8FF)
-              : const Color(0xFF35205A),
-          secondaryContainer: dark
-              ? const Color(0xFF1C1D6F)
-              : const Color(0xFFE0E7FC),
-          onSecondaryContainer: dark
-              ? const Color(0xFFE5E7FF)
-              : const Color(0xFF252C68),
-          surface: surface,
+          onPrimary: Colors.white,
+          primaryContainer: sky,
+          onPrimaryContainer: primaryDark,
+          secondaryContainer: foundSurface,
+          onSecondaryContainer: slate,
           onSurface: foreground,
           outline: outline,
-          error: dark ? const Color(0xFFFFB4C7) : const Color(0xFF9A477F),
+          error: primaryDark,
+          surfaceContainerLowest: cream,
+          surfaceContainerLow: cream,
+          surfaceContainer: const Color(0xFFFFFCF7),
+          surfaceContainerHigh: sand,
+          surfaceContainerHighest: sky,
         );
+
     return ThemeData(
       useMaterial3: true,
       colorScheme: colors,
-      scaffoldBackgroundColor: pageBackground,
+      scaffoldBackgroundColor: background,
       canvasColor: surface,
-      dividerColor: dark ? const Color(0xFF292D72) : const Color(0xFFE1E2F5),
-      iconTheme: IconThemeData(color: colors.primary),
-      textTheme: (dark ? ThemeData.dark() : ThemeData.light()).textTheme
-          .apply(
-            fontFamily: 'Georgia',
-            bodyColor: foreground,
-            displayColor: foreground,
-          )
-          .copyWith(
-            headlineSmall: TextStyle(
-              fontFamily: 'Georgia',
-              fontWeight: FontWeight.w700,
-              color: foreground,
-            ),
-            titleLarge: TextStyle(
-              fontFamily: 'Georgia',
-              fontWeight: FontWeight.w700,
-              color: foreground,
-            ),
-          ),
-      appBarTheme: AppBarTheme(
-        backgroundColor: dark ? const Color(0xFF10134C) : header,
+      fontFamily: defaultTargetPlatform == TargetPlatform.iOS
+          ? '.SF Pro Text'
+          : 'Roboto',
+      fontFamilyFallback: const ['.SF UI Text', 'SF Pro Text', 'Roboto'],
+      dividerColor: sand,
+      iconTheme: const IconThemeData(color: primary),
+      appBarTheme: const AppBarTheme(
+        backgroundColor: header,
         foregroundColor: foreground,
         surfaceTintColor: Colors.transparent,
         elevation: 0,
         centerTitle: false,
-        iconTheme: IconThemeData(color: colors.primary),
+        iconTheme: IconThemeData(color: primary),
         titleTextStyle: TextStyle(
           color: foreground,
           fontSize: 20,
@@ -92,18 +81,18 @@ class CampusTheme {
       ),
       inputDecorationTheme: InputDecorationTheme(
         filled: true,
-        fillColor: dark ? const Color(0xFF101342) : const Color(0xFFF9F8FF),
+        fillColor: const Color(0xFFFFFCF7),
         border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(16),
-          borderSide: BorderSide(color: outline),
+          borderRadius: BorderRadius.circular(18),
+          borderSide: const BorderSide(color: outline),
         ),
         enabledBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(16),
-          borderSide: BorderSide(color: outline),
+          borderRadius: BorderRadius.circular(18),
+          borderSide: const BorderSide(color: outline),
         ),
         focusedBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(16),
-          borderSide: BorderSide(color: colors.primary, width: 2),
+          borderRadius: BorderRadius.circular(18),
+          borderSide: const BorderSide(color: primary, width: 2),
         ),
         contentPadding: const EdgeInsets.symmetric(
           horizontal: 16,
@@ -113,27 +102,32 @@ class CampusTheme {
       cardTheme: CardThemeData(
         color: surface,
         elevation: 2,
-        shadowColor: dark ? const Color(0x66000020) : const Color(0x222C2480),
+        shadowColor: const Color(0x223E5663),
         surfaceTintColor: Colors.transparent,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(22),
+          side: const BorderSide(color: border),
+        ),
         margin: EdgeInsets.zero,
       ),
       navigationBarTheme: NavigationBarThemeData(
-        backgroundColor: dark
-            ? const Color(0xFF101342)
-            : const Color(0xFFF9F8FF),
-        indicatorColor: dark
-            ? const Color(0xFF3F278A)
-            : const Color(0xFFEBDDFA),
-        elevation: 8,
-        shadowColor: dark ? Colors.black54 : const Color(0x223F278A),
+        backgroundColor: cream,
+        indicatorColor: sky,
+        elevation: 6,
+        height: 72,
+        shadowColor: const Color(0x223E5663),
+        surfaceTintColor: Colors.transparent,
+        labelBehavior: NavigationDestinationLabelBehavior.alwaysShow,
+        indicatorShape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(18),
+        ),
         labelTextStyle: WidgetStateProperty.resolveWith(
           (states) => TextStyle(
             fontWeight: states.contains(WidgetState.selected)
                 ? FontWeight.w700
                 : FontWeight.w500,
             color: states.contains(WidgetState.selected)
-                ? colors.primary
+                ? primary
                 : colors.onSurfaceVariant,
           ),
         ),
@@ -141,21 +135,35 @@ class CampusTheme {
       filledButtonTheme: FilledButtonThemeData(
         style: FilledButton.styleFrom(
           minimumSize: const Size.fromHeight(50),
-          backgroundColor: colors.primary,
-          foregroundColor: colors.onPrimary,
+          backgroundColor: primary,
+          foregroundColor: Colors.white,
           shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(16),
+            borderRadius: BorderRadius.circular(18),
           ),
         ),
       ),
       outlinedButtonTheme: OutlinedButtonThemeData(
         style: OutlinedButton.styleFrom(
-          foregroundColor: colors.primary,
-          side: BorderSide(color: colors.primary.withValues(alpha: 0.55)),
+          foregroundColor: primary,
+          side: const BorderSide(color: border),
           shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(16),
+            borderRadius: BorderRadius.circular(18),
           ),
         ),
+      ),
+      textButtonTheme: TextButtonThemeData(
+        style: TextButton.styleFrom(
+          foregroundColor: primary,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(14),
+          ),
+        ),
+      ),
+      snackBarTheme: SnackBarThemeData(
+        backgroundColor: slate,
+        contentTextStyle: const TextStyle(color: Colors.white),
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
       ),
     );
   }

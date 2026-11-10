@@ -8,13 +8,14 @@ use App\Models\Conversation;
 use App\Models\Handover;
 use App\Models\LostSighting;
 use App\Models\User;
-use App\Services\TextMasker;
 use App\Services\HandoverExpiry;
+use App\Services\TextMasker;
+use App\Services\UserRestrictionService;
 use App\Support\PublicMediaUrl;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Crypt;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 
 class ConversationController extends Controller
@@ -55,13 +56,13 @@ class ConversationController extends Controller
                                 ->orWhereHas('post', fn ($post) => $post->where('user_id', $request->user()->id));
                         });
                 })->orWhere('support_user_id', $request->user()->id)
-                ->orWhere(function ($direct) use ($request): void {
-                    $direct->whereNotNull('user_one_id')
-                        ->where(function ($p) use ($request): void {
-                            $p->where('user_one_id', $request->user()->id)
-                              ->orWhere('user_two_id', $request->user()->id);
-                        });
-                });
+                    ->orWhere(function ($direct) use ($request): void {
+                        $direct->whereNotNull('user_one_id')
+                            ->where(function ($p) use ($request): void {
+                                $p->where('user_one_id', $request->user()->id)
+                                    ->orWhere('user_two_id', $request->user()->id);
+                            });
+                    });
             })
             ->latest('updated_at')
             ->get()
@@ -70,12 +71,13 @@ class ConversationController extends Controller
         return response()->json(['data' => $conversations]);
     }
 
-    public function startDirectChat(Request $request): JsonResponse
+    public function startDirectChat(Request $request, UserRestrictionService $restrictions): JsonResponse
     {
         $data = $request->validate([
             'recipient_id' => ['required', 'integer', 'exists:users,id', 'different:user_id'],
         ]);
         $recipientId = (int) $data['recipient_id'];
+        $restrictions->assertCanMessage($request->user(), $recipientId);
         $userOneId = min($request->user()->id, $recipientId);
         $userTwoId = max($request->user()->id, $recipientId);
 
@@ -180,9 +182,13 @@ class ConversationController extends Controller
         return response()->json($messages);
     }
 
-    public function send(Request $request, Conversation $conversation, TextMasker $masker): JsonResponse
+    public function send(Request $request, Conversation $conversation, TextMasker $masker, UserRestrictionService $restrictions): JsonResponse
     {
         $this->authorizeParticipant($conversation, $request->user());
+        $restrictions->assertCanMessage(
+            $request->user(),
+            $this->messageRecipientId($conversation, $request->user()),
+        );
         abort_if(
             $conversation->closed_at
                 || $conversation->status === 'declined'
@@ -271,6 +277,7 @@ class ConversationController extends Controller
         Request $request,
         LostSighting $sighting,
         TextMasker $masker,
+        UserRestrictionService $restrictions,
     ): JsonResponse {
         $sighting->loadMissing('post');
         abort_unless(
@@ -281,6 +288,7 @@ class ConversationController extends Controller
         $data = $request->validate([
             'body' => ['required', 'string', 'max:2000'],
         ]);
+        $restrictions->assertCanMessage($request->user());
         $conversation = Conversation::firstOrCreate([
             'support_user_id' => $request->user()->id,
             'support_sighting_id' => $sighting->id,
@@ -328,6 +336,7 @@ class ConversationController extends Controller
         Request $request,
         ClaimRequest $claim,
         TextMasker $masker,
+        UserRestrictionService $restrictions,
     ): JsonResponse {
         $claim->loadMissing('post');
         abort_unless(
@@ -339,6 +348,7 @@ class ConversationController extends Controller
         $data = $request->validate([
             'body' => ['required', 'string', 'max:2000'],
         ]);
+        $restrictions->assertCanMessage($request->user());
         $conversation = Conversation::firstOrCreate([
             'support_user_id' => $request->user()->id,
             'support_claim_id' => $claim->id,
@@ -549,7 +559,7 @@ class ConversationController extends Controller
             409,
             'Both participants can approve the handover before it is scheduled.',
         );
-        DB::transaction(function () use ($request, $handover, $claim, $sighting, $conversation): void {
+        DB::transaction(function () use ($request, $handover, $claim, $sighting): void {
             $locked = Handover::whereKey($handover->id)->lockForUpdate()->firstOrFail();
             abort_unless(
                 $this->canReceiveParticipantAgreement($locked),
@@ -616,7 +626,7 @@ class ConversationController extends Controller
             'reason' => ['required', 'string', 'max:1000'],
         ]);
         $limit = (int) DB::table('settings')->where('key', 'handover_reschedule_attempts')->value('value') ?: 2;
-        $attempts = DB::transaction(function () use ($request, $handover, $data, $limit, $masker, $ownerId, $finderId): int {
+        $attempts = DB::transaction(function () use ($handover, $data, $limit, $masker, $ownerId, $finderId): int {
             $locked = Handover::whereKey($handover->id)->lockForUpdate()->firstOrFail();
             abort_unless($locked->status === 'scheduled', 409, 'This handover is no longer scheduled.');
             abort_if(
@@ -757,5 +767,42 @@ class ConversationController extends Controller
                 : null,
             'last_message_at' => $conversation->messages()->latest()->value('created_at'),
         ];
+    }
+
+    private function messageRecipientId(Conversation $conversation, User $sender): ?int
+    {
+        if ($conversation->user_one_id !== null) {
+            return $conversation->user_one_id === $sender->id
+                ? $conversation->user_two_id
+                : $conversation->user_one_id;
+        }
+
+        if ($conversation->support_user_id !== null) {
+            return null;
+        }
+
+        $conversation->loadMissing([
+            'claimRequest.post',
+            'claimRequest.claimant',
+            'sighting.post',
+            'sighting.user',
+        ]);
+        if ($conversation->claimRequest) {
+            $claim = $conversation->claimRequest;
+
+            return $sender->id === $claim->claimant_id
+                ? $claim->post?->user_id
+                : $claim->claimant_id;
+        }
+
+        if ($conversation->sighting) {
+            $sighting = $conversation->sighting;
+
+            return $sender->id === $sighting->user_id
+                ? $sighting->post?->user_id
+                : $sighting->user_id;
+        }
+
+        return null;
     }
 }

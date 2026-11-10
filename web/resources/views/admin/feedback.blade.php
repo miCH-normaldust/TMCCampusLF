@@ -5,10 +5,8 @@
 @section('content')
     <div class="page-heading"><div><p class="eyebrow">MEMBER SUPPORT</p><h1>Feedbacks</h1><p class="muted">Read member suggestions and issue reports, then record a status and response.</p></div></div>
     <section class="card">
-        <form class="filter-form compact-filter" method="get" action="{{ route('admin.feedback.index') }}">
+        <form class="filter-form compact-filter" method="get" action="{{ route('admin.feedback.index') }}" data-auto-filter>
             <label>Status<select name="status"><option value="">All feedback</option>@foreach (['open', 'reviewing', 'resolved', 'closed'] as $status)<option value="{{ $status }}" @selected(request('status') === $status)>{{ ucfirst($status) }}</option>@endforeach</select></label>
-            <button class="button" type="submit">Filter</button>
-            <a class="button secondary" href="{{ route('admin.feedback.index') }}">Clear</a>
         </form>
         <div class="feedback-list section">
             @forelse ($feedback as $entry)

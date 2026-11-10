@@ -7,6 +7,7 @@ use App\Models\Category;
 use App\Models\Location;
 use App\Models\OtpCode;
 use App\Models\Post;
+use App\Models\PostImage;
 use App\Models\User;
 use App\Models\VerificationQuestion;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -53,14 +54,41 @@ class AuthenticationAndPrivacyTest extends TestCase
             'email_verified_at' => now(),
         ]);
 
-        $this->withSession(['admin_login_captcha_answer' => '7'])
-            ->post('/admin/login', [
-                'email' => 'member@tmc.test',
-                'password' => 'LongTestPassword!123',
-                'captcha_answer' => '7',
-            ])
+        $this->post('/admin/login', [
+            'email' => 'member@tmc.test',
+            'password' => 'LongTestPassword!123',
+        ])
             ->assertRedirect()
             ->assertSessionHasErrors('email');
+    }
+
+    public function test_admin_can_reset_password_with_a_one_time_email_code(): void
+    {
+        Mail::fake();
+        $admin = User::create([
+            'first_name' => 'Recovery',
+            'last_name' => 'Admin',
+            'tmc_id_no' => 'ADMIN-RECOVERY',
+            'email' => 'campuslflostfound@gmail.com',
+            'password' => 'OldLongPassword!123',
+            'role' => 'admin',
+            'status' => 'active',
+            'email_verified_at' => now(),
+        ]);
+
+        $this->post(route('admin.password.email'), ['email' => $admin->email])
+            ->assertRedirect(route('admin.password.request', ['reset' => 1, 'email' => $admin->email]));
+        Mail::assertSent(OneTimeCode::class, fn (OneTimeCode $mail): bool => $mail->hasTo($admin->email) && $mail->purpose === 'password_reset');
+        $code = Mail::sent(OneTimeCode::class)->first()->code;
+
+        $this->post(route('admin.password.update'), [
+            'email' => $admin->email,
+            'code' => $code,
+            'password' => 'NewLongPassword!456',
+            'password_confirmation' => 'NewLongPassword!456',
+        ])->assertRedirect(route('admin.login'));
+
+        $this->assertTrue(Hash::check('NewLongPassword!456', $admin->fresh()->password));
     }
 
     public function test_invalid_email_otp_is_rejected_and_attempt_is_counted(): void
@@ -89,7 +117,7 @@ class AuthenticationAndPrivacyTest extends TestCase
         $this->assertDatabaseHas('otp_codes', ['id' => $otp->id, 'attempts' => 1]);
     }
 
-    public function test_registration_accepts_the_current_database_backed_security_challenge(): void
+    public function test_registration_does_not_require_a_security_challenge(): void
     {
         $this->withoutMiddleware(ThrottleRequests::class);
         Mail::fake();
@@ -97,9 +125,6 @@ class AuthenticationAndPrivacyTest extends TestCase
             ['key' => 'tmc_email_domain'],
             ['value' => 'gmail.com', 'created_at' => now(), 'updated_at' => now()],
         );
-        $challenge = $this->getJson('/api/v1/captcha')->assertOk()->json();
-        preg_match('/(\d+) \+ (\d+)/', $challenge['question'], $numbers);
-
         $this->postJson('/api/v1/register', [
             'first_name' => 'TMC',
             'last_name' => 'Member',
@@ -110,14 +135,10 @@ class AuthenticationAndPrivacyTest extends TestCase
             'password' => 'LongTestPassword!123',
             'password_confirmation' => 'LongTestPassword!123',
             'terms_accepted' => true,
-            'captcha_token' => $challenge['token'],
-            'captcha_answer' => (string) ((int) $numbers[1] + (int) $numbers[2]),
         ])->assertCreated();
 
         $this->assertDatabaseHas('users', ['email' => 'captcha-member@gmail.com']);
-        $this->assertDatabaseMissing('captcha_challenges', [
-            'token_hash' => hash('sha256', $challenge['token']),
-        ]);
+        $this->getJson('/api/v1/captcha')->assertNotFound();
     }
 
     public function test_registration_does_not_expose_mail_transport_errors_or_keep_partial_account(): void
@@ -129,9 +150,6 @@ class AuthenticationAndPrivacyTest extends TestCase
             ->with($email)
             ->andThrow(new TransportException('SMTP credentials must not be returned to the client.'));
 
-        $challenge = $this->getJson('/api/v1/captcha')->assertOk()->json();
-        preg_match('/(\d+) \+ (\d+)/', $challenge['question'], $numbers);
-
         $this->postJson('/api/v1/register', [
             'first_name' => 'Mail',
             'last_name' => 'Failure',
@@ -142,8 +160,6 @@ class AuthenticationAndPrivacyTest extends TestCase
             'password' => 'LongTestPassword!123',
             'password_confirmation' => 'LongTestPassword!123',
             'terms_accepted' => true,
-            'captcha_token' => $challenge['token'],
-            'captcha_answer' => (string) ((int) $numbers[1] + (int) $numbers[2]),
         ])->assertStatus(503)
             ->assertExactJson([
                 'message' => 'Email delivery is unavailable. Please contact the administrator or try again later.',
@@ -181,9 +197,6 @@ class AuthenticationAndPrivacyTest extends TestCase
             ->andThrow(new TransportException('SMTP authentication failed.'));
         Mail::shouldReceive('mailer')->once()->with('log')->andReturn($logMailer);
 
-        $challenge = $this->getJson('/api/v1/captcha')->assertOk()->json();
-        preg_match('/(\d+) \+ (\d+)/', $challenge['question'], $numbers);
-
         $this->postJson('/api/v1/register', [
             'first_name' => 'Local',
             'last_name' => 'Fallback',
@@ -194,8 +207,6 @@ class AuthenticationAndPrivacyTest extends TestCase
             'password' => 'LongTestPassword!123',
             'password_confirmation' => 'LongTestPassword!123',
             'terms_accepted' => true,
-            'captcha_token' => $challenge['token'],
-            'captcha_answer' => (string) ((int) $numbers[1] + (int) $numbers[2]),
         ])->assertCreated()
             ->assertJsonPath('message', 'Gmail delivery is unavailable. For local testing, find the verification code in web/storage/logs/laravel.log.');
 
@@ -268,8 +279,6 @@ class AuthenticationAndPrivacyTest extends TestCase
             'updated_at' => now(),
         ]);
 
-        $challenge = $this->getJson('/api/v1/captcha')->assertOk()->json();
-        preg_match('/(\d+) \+ (\d+)/', $challenge['question'], $numbers);
         $this->postJson('/api/v1/register', [
             'first_name' => 'Verified',
             'last_name' => 'Member',
@@ -280,8 +289,6 @@ class AuthenticationAndPrivacyTest extends TestCase
             'password' => 'LongTestPassword!123',
             'password_confirmation' => 'LongTestPassword!123',
             'terms_accepted' => true,
-            'captcha_token' => $challenge['token'],
-            'captcha_answer' => (string) ((int) $numbers[1] + (int) $numbers[2]),
         ])->assertCreated();
 
         Mail::assertSent(OneTimeCode::class, fn (OneTimeCode $mail): bool => $mail->hasTo('verified-member@gmail.com') && $mail->purpose === 'registration');
@@ -420,72 +427,50 @@ class AuthenticationAndPrivacyTest extends TestCase
         ])->assertUnprocessable();
     }
 
-    public function test_incorrect_security_answer_consumes_the_challenge_and_prompts_refresh(): void
+    public function test_registration_ignores_obsolete_captcha_fields(): void
     {
         $this->withoutMiddleware(ThrottleRequests::class);
-        $challenge = $this->getJson('/api/v1/captcha')->assertOk()->json();
-        $details = [
+        $this->postJson('/api/v1/register', [
             'first_name' => 'TMC',
             'last_name' => 'Member',
-            'tmc_id_no' => 'TMC-CAPTCHA-2',
+            'tmc_id_no' => 'TMC-NO-CAPTCHA',
             'email' => 'captcha-member2@gmail.com',
             'user_type' => 'student',
             'department' => 'CCS',
             'password' => 'LongTestPassword!123',
             'password_confirmation' => 'LongTestPassword!123',
             'terms_accepted' => true,
-            'captcha_token' => $challenge['token'],
+            'captcha_token' => 'obsolete-token',
             'captcha_answer' => '0',
-        ];
-
-        $this->postJson('/api/v1/register', $details)
-            ->assertUnprocessable()
-            ->assertJsonPath('errors.captcha_answer.0', 'The security answer is incorrect. Please try the new challenge.');
-        $this->postJson('/api/v1/register', $details)
-            ->assertUnprocessable()
-            ->assertJsonPath('errors.captcha_answer.0', 'The security check expired. Please request a new challenge.');
+        ])->assertCreated();
     }
 
     public function test_registration_requires_gmail_department_and_other_user_type_details(): void
     {
         $this->withoutMiddleware(ThrottleRequests::class);
-        $challenge = $this->getJson('/api/v1/captcha')->assertOk()->json();
         $details = [
             'first_name' => 'TMC',
             'last_name' => 'Member',
-            'tmc_id_no' => 'TMC-CAPTCHA-3',
+            'tmc_id_no' => 'TMC-NO-CAPTCHA-3',
             'email' => 'custom-member@example.com',
             'user_type' => 'other',
             'department' => 'OTHER',
             'password' => 'LongTestPassword!123',
             'password_confirmation' => 'LongTestPassword!123',
             'terms_accepted' => true,
-            'captcha_token' => $challenge['token'],
-            'captcha_answer' => '0',
         ];
 
-        preg_match('/(\d+) \+ (\d+)/', $challenge['question'], $numbers);
-        $details['captcha_answer'] = (string) ((int) $numbers[1] + (int) $numbers[2]);
         $this->postJson('/api/v1/register', $details)
             ->assertUnprocessable()
             ->assertJsonValidationErrors(['user_type_other', 'department']);
 
         $details['user_type_other'] = 'Visiting researcher';
         $details['department'] = 'CCS';
-        $challenge = $this->getJson('/api/v1/captcha')->json();
-        $details['captcha_token'] = $challenge['token'];
-        preg_match('/(\d+) \+ (\d+)/', $challenge['question'], $numbers);
-        $details['captcha_answer'] = (string) ((int) $numbers[1] + (int) $numbers[2]);
         $this->postJson('/api/v1/register', $details)
             ->assertUnprocessable()
             ->assertJsonValidationErrors(['email']);
 
         $details['email'] = 'custom-member@gmail.com';
-        $challenge = $this->getJson('/api/v1/captcha')->json();
-        $details['captcha_token'] = $challenge['token'];
-        preg_match('/(\d+) \+ (\d+)/', $challenge['question'], $numbers);
-        $details['captcha_answer'] = (string) ((int) $numbers[1] + (int) $numbers[2]);
-
         $this->postJson('/api/v1/register', $details)->assertCreated();
         $this->assertDatabaseHas('users', [
             'email' => 'custom-member@gmail.com',
@@ -495,7 +480,7 @@ class AuthenticationAndPrivacyTest extends TestCase
         ]);
     }
 
-    public function test_public_post_response_never_contains_verification_answers(): void
+    public function test_public_post_response_includes_owner_photos_but_not_verification_answers(): void
     {
         $user = User::create([
             'first_name' => 'Finder',
@@ -521,16 +506,24 @@ class AuthenticationAndPrivacyTest extends TestCase
             'custody' => 'with_me',
             'status' => 'active',
         ]);
+        PostImage::create([
+            'post_id' => $post->id,
+            'path' => 'posts/owner-photo.webp',
+            'alt_text' => 'Blue bottle on table',
+        ]);
         VerificationQuestion::create([
             'post_id' => $post->id,
             'question' => 'What sticker is on it?',
             'answer' => 'gold star',
         ]);
 
-        $this->getJson('/api/v1/posts/'.$post->id)
+        $response = $this->getJson('/api/v1/posts/'.$post->id)
             ->assertOk()
             ->assertJsonFragment(['question' => 'What sticker is on it?'])
             ->assertJsonMissingPath('data.verification_questions.0.answer')
             ->assertDontSee('gold star');
+        $this->assertSame('Blue bottle on table', $response->json('data.images.0.alt_text'));
+        $this->assertStringContainsString('api/v1/media?expires=', $response->json('data.images.0.url'));
+        $this->assertStringContainsString('path=posts%2Fowner-photo.webp', $response->json('data.images.0.url'));
     }
 }

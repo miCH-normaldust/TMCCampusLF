@@ -2,11 +2,11 @@
 
 namespace App\Http\Controllers\Api;
 
-use App\Http\Controllers\Controller;
 use App\Exceptions\OtpDeliveryException;
-use App\Http\Requests\LoginRequest;
+use App\Http\Controllers\Controller;
 use App\Http\Requests\ChangePasswordRequest;
 use App\Http\Requests\ForgotPasswordRequest;
+use App\Http\Requests\LoginRequest;
 use App\Http\Requests\RegisterRequest;
 use App\Http\Requests\ResendOtpRequest;
 use App\Http\Requests\ResetPasswordRequest;
@@ -14,7 +14,6 @@ use App\Http\Requests\UpdateProfileRequest;
 use App\Http\Requests\VerifyOtpRequest;
 use App\Http\Requests\VerifyPasswordResetOtpRequest;
 use App\Models\ActivityLog;
-use App\Models\OtpCode;
 use App\Models\User;
 use App\Services\ImageReencoder;
 use App\Services\OtpCodeService;
@@ -28,26 +27,6 @@ use Illuminate\Support\Str;
 
 class AuthController extends Controller
 {
-    public function captcha(): JsonResponse
-    {
-        $left = random_int(2, 9);
-        $right = random_int(1, 9);
-        $token = Str::random(64);
-        DB::table('captcha_challenges')->where('expires_at', '<', now())->delete();
-        DB::table('captcha_challenges')->insert([
-            'token_hash' => hash('sha256', $token),
-            'answer_hash' => Hash::make((string) ($left + $right)),
-            'expires_at' => now()->addMinutes(5),
-            'created_at' => now(),
-            'updated_at' => now(),
-        ]);
-
-        return response()->json([
-            'question' => "{$left} + {$right} = ?",
-            'token' => $token,
-        ]);
-    }
-
     public function register(RegisterRequest $request, OtpCodeService $codes): JsonResponse
     {
         $matched = DB::table('tmc_masterlist')
@@ -58,7 +37,7 @@ class AuthController extends Controller
         try {
             [$user, $localFallback] = DB::transaction(function () use ($request, $matched, $codes): array {
                 $user = User::create([
-                    ...$request->safe()->except(['terms_accepted', 'captcha_answer', 'captcha_token']),
+                    ...$request->safe()->except(['terms_accepted']),
                     'email' => strtolower($request->string('email')->toString()),
                     'role' => 'user',
                     'status' => $matched ? 'active' : 'pending',
@@ -144,6 +123,7 @@ class AuthController extends Controller
         try {
             $localFallback = DB::transaction(function () use ($user, $codes): bool {
                 DB::table('password_reset_tokens')->where('email', $user->email)->delete();
+
                 return $codes->send($user, 'password_reset');
             });
         } catch (OtpDeliveryException) {

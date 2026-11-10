@@ -12,7 +12,7 @@
     <h2>Lost-item proof submissions</h2>
     <p class="muted">All proofs for an origin post are grouped together. Owners review proofs before administrator decisions.</p>
     <section class="card">
-        <form class="filter-form compact-filter" method="get" action="{{ route('admin.sightings.index') }}">
+        <form class="filter-form compact-filter" method="get" action="{{ route('admin.sightings.index') }}" data-auto-filter>
             <label>Status
                 <select name="status">
                     <option value="" @selected($status === '')>All proofs</option>
@@ -21,8 +21,6 @@
                     <option value="rejected" @selected($status === 'rejected')>Rejected</option>
                 </select>
             </label>
-            <button class="button" type="submit">Filter</button>
-            <a class="button secondary" href="{{ route('admin.sightings.index') }}">Clear</a>
         </form>
     </section>
     <section class="proof-list">

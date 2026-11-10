@@ -11,15 +11,17 @@ use App\Models\Category;
 use App\Models\Location;
 use App\Models\Post;
 use App\Models\User;
-use App\Services\ImageReencoder;
 use App\Services\BlockedWordFilter;
+use App\Services\ImageReencoder;
 use App\Services\TextMasker;
+use App\Services\UserRestrictionService;
 use App\Support\PublicMediaUrl;
+use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
-use Carbon\Carbon;
 use Illuminate\Support\Str;
 
 class PostController extends Controller
@@ -227,7 +229,7 @@ class PostController extends Controller
                 $altText = $request->input('photos.'.$index.'.alt_text');
             }
 
-            if ($file instanceof \Illuminate\Http\UploadedFile) {
+            if ($file instanceof UploadedFile) {
                 $normalized[] = [
                     'file' => $file,
                     'alt_text' => $altText ?? '',
@@ -238,9 +240,10 @@ class PostController extends Controller
         return $normalized;
     }
 
-    public function store(StorePostRequest $request, ImageReencoder $images, TextMasker $masker, BlockedWordFilter $blockedWords): JsonResponse
+    public function store(StorePostRequest $request, ImageReencoder $images, TextMasker $masker, BlockedWordFilter $blockedWords, UserRestrictionService $restrictions): JsonResponse
     {
         $user = $request->user();
+        $restrictions->assertCanPost($user, $request->validated('type'));
         $dailyLimit = (int) DB::table('settings')->where('key', 'posts_per_day')->value('value') ?: 5;
         abort_if($user->posts()->whereDate('created_at', today())->count() >= $dailyLimit, 429, 'Daily post limit reached.');
 
@@ -258,7 +261,7 @@ class PostController extends Controller
             'location_id', 'event_date', 'custody', 'expires_at',
         ]));
         $photos = $this->normalizePhotos($request);
-        $post = DB::transaction(function () use ($data, $postData, $user, $images, $request, $masker, $photos): Post {
+        $post = DB::transaction(function () use ($data, $postData, $user, $images, $masker, $photos): Post {
             $post = $user->posts()->create($postData);
 
             foreach ($photos as $photo) {
@@ -330,7 +333,7 @@ class PostController extends Controller
         return response()->json(['message' => 'Post deleted.']);
     }
 
-    public function update(StorePostRequest $request, Post $post, ImageReencoder $images, TextMasker $masker, BlockedWordFilter $blockedWords): PostResource
+    public function update(StorePostRequest $request, Post $post, ImageReencoder $images, TextMasker $masker, BlockedWordFilter $blockedWords, UserRestrictionService $restrictions): PostResource
     {
         abort_unless($post->user_id === $request->user()->id, 403);
         abort_unless($post->status === 'active', 409, 'Only active posts can be edited.');
@@ -343,6 +346,7 @@ class PostController extends Controller
         );
 
         $data = $request->validated();
+        $restrictions->assertCanPost($request->user(), $data['type']);
         $photos = $this->normalizePhotos($request);
         abort_if($post->images()->count() + count($photos) > 5, 422, 'A post can include at most five photos.');
         abort_unless(Category::whereKey($data['category_id'])->where('is_active', true)->exists(), 422, 'Category is unavailable.');

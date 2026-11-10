@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Controllers\Admin\ActivityController;
 use App\Http\Controllers\Admin\AdminAuthController;
 use App\Http\Controllers\Admin\AdminNotificationController;
 use App\Http\Controllers\Admin\ClaimListController;
@@ -9,7 +10,6 @@ use App\Http\Controllers\Admin\FeedbackController;
 use App\Http\Controllers\Admin\HandoverController;
 use App\Http\Controllers\Admin\ModerationController;
 use App\Http\Controllers\Admin\PostRetrievalRequestController;
-use App\Http\Controllers\Admin\ActivityController;
 use App\Http\Controllers\Admin\SettingsController;
 use App\Http\Controllers\Admin\SightingReviewController;
 use App\Http\Controllers\Admin\SupportConversationController;
@@ -20,11 +20,16 @@ use Illuminate\Support\Facades\Route;
 Route::redirect('/', '/admin');
 Route::get('/admin/login', [AdminAuthController::class, 'create'])->name('admin.login');
 Route::post('/admin/login', [AdminAuthController::class, 'store'])->middleware('throttle:5,1')->name('admin.login.store');
+Route::get('/admin/forgot-password', [AdminAuthController::class, 'forgotPassword'])->name('admin.password.request');
+Route::post('/admin/forgot-password', [AdminAuthController::class, 'sendPasswordResetCode'])->middleware('throttle:3,1')->name('admin.password.email');
+Route::post('/admin/forgot-password/reset', [AdminAuthController::class, 'resetPassword'])->middleware('throttle:5,1')->name('admin.password.update');
 
 Route::prefix('admin')->name('admin.')->middleware(['auth:admin', 'role:admin', TrackAdminRouteUsage::class])->group(function (): void {
     Route::post('/logout', [AdminAuthController::class, 'destroy'])->name('logout');
     Route::get('/', [DashboardController::class, 'index'])->name('dashboard');
     Route::get('/community-feed', [DashboardController::class, 'communityFeed'])->name('community-feed.index');
+    Route::get('/community-feed/posts/{post}', [DashboardController::class, 'communityPost'])->name('community-feed.show');
+    Route::post('/community-feed/posts/{post}/moderate', [ModerationController::class, 'moderatePost'])->name('community-feed.moderate');
     Route::get('/claims', [ClaimListController::class, 'index'])->name('claims.index');
     Route::get('/claims/{claim}', [ClaimReviewController::class, 'show'])->name('claims.show');
     Route::post('/claims/{claim}', [ClaimReviewController::class, 'decide'])->name('claims.decide');
@@ -46,6 +51,9 @@ Route::prefix('admin')->name('admin.')->middleware(['auth:admin', 'role:admin', 
     Route::post('/chats/{conversation}/messages', [SupportConversationController::class, 'send'])->name('chats.send');
     Route::get('/users', [UserController::class, 'index'])->name('users.index');
     Route::post('/users', [UserController::class, 'store'])->name('users.store');
+    Route::get('/users/{user}', [UserController::class, 'show'])->name('users.show');
+    Route::post('/users/{user}/moderate', [UserController::class, 'moderate'])->name('users.moderate');
+    Route::post('/users/{user}/restrictions/{restriction}/lift', [UserController::class, 'liftRestriction'])->name('users.restrictions.lift');
     Route::patch('/users/{user}/status', [UserController::class, 'setStatus'])->name('users.status');
     Route::post('/masterlist/import', [UserController::class, 'import'])->name('masterlist.import');
     Route::get('/masterlist/confirm', fn () => redirect()->route('admin.users.index')->withErrors([

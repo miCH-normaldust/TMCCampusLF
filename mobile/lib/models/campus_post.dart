@@ -71,7 +71,9 @@ class CampusPost {
       authorId: json['author_id'] as int?,
       authorFirstName: json['author_first_name'] as String? ?? 'TMC member',
       authorLastName: json['author_last_name'] as String? ?? '',
-      authorProfilePictureUrl: json['author_profile_picture_url'] as String?,
+      authorProfilePictureUrl: _resolveOptionalMediaUrl(
+        json['author_profile_picture_url'] as String?,
+      ),
       questions: rawQuestions is List
           ? rawQuestions
                 .whereType<Map<String, dynamic>>()
@@ -80,8 +82,7 @@ class CampusPost {
           : const [],
       isMine: json['is_mine'] as bool? ?? false,
       hasSubmittedClaim: json['has_submitted_claim'] as bool? ?? false,
-      isHandoverParticipant:
-          json['is_handover_participant'] as bool? ?? false,
+      isHandoverParticipant: json['is_handover_participant'] as bool? ?? false,
       images: rawImages is List
           ? rawImages
                 .whereType<Map<String, dynamic>>()
@@ -105,6 +106,9 @@ class CampusPost {
 
     return Uri.parse(AppConfig.apiBaseUrl).resolve(url).toString();
   }
+
+  static String? _resolveOptionalMediaUrl(String? url) =>
+      url == null || url.isEmpty ? url : _resolveMediaUrl(url);
 
   /// Returns a copy of this post with the reaction fields replaced.
   ///

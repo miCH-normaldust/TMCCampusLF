@@ -5,11 +5,13 @@ namespace App\Http\Controllers\Admin;
 use App\Http\Controllers\Controller;
 use App\Models\Category;
 use App\Models\ClaimRequest;
+use App\Models\Handover;
 use App\Models\Post;
 use App\Models\User;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\DB;
 use Illuminate\View\View;
 
 class DashboardController extends Controller
@@ -26,6 +28,31 @@ class DashboardController extends Controller
             ->count();
         $pendingReports = DB::table('reports')->where('status', 'pending')->count();
         $pendingFeedback = DB::table('feedback')->whereIn('status', ['open', 'reviewing'])->count();
+        $activityStart = today()->subDays(29);
+        $dailyActivity = collect(range(0, 29))
+            ->map(fn (int $offset): Carbon => $activityStart->copy()->addDays($offset))
+            ->mapWithKeys(fn (Carbon $date): array => [$date->toDateString() => [
+                'label' => $date->format('M j'),
+                'lost' => 0,
+                'found' => 0,
+            ]]);
+        $postActivity = DB::table('posts')
+            ->selectRaw('DATE(created_at) as activity_date, type, COUNT(*) as total')
+            ->where('created_at', '>=', $activityStart)
+            ->groupBy('activity_date', 'type')
+            ->get();
+        foreach ($postActivity as $entry) {
+            if ($dailyActivity->has($entry->activity_date)) {
+                $day = $dailyActivity->get($entry->activity_date);
+                $day[$entry->type] = (int) $entry->total;
+                $dailyActivity->put($entry->activity_date, $day);
+            }
+        }
+        $engagement = [
+            'reports' => $this->countByUserType('reports', 'reporter_id', $activityStart),
+            'proofs' => $this->countByUserType('lost_sightings', 'user_id', $activityStart),
+            'claims' => $this->countByUserType('claim_requests', 'claimant_id', $activityStart),
+        ];
         $routeUsage = DB::table('admin_route_usage')
             ->where('admin_id', $admin->id)
             ->get()
@@ -48,16 +75,36 @@ class DashboardController extends Controller
             'pendingHandovers' => $pendingHandovers,
             'pendingReports' => $pendingReports,
             'pendingFeedback' => $pendingFeedback,
+            'usersCount' => User::where('role', 'user')->count(),
             'retrievedThisMonth' => Post::where('status', 'retrieved')
                 ->whereBetween('updated_at', [now()->startOfMonth(), now()->endOfMonth()])
                 ->count(),
+            'solvedPosts' => Post::where('status', 'retrieved')->count(),
             'newUsers' => User::where('created_at', '>=', now()->subDays(30))->count(),
             'activePosts' => Post::whereIn('status', ['active', 'claim_pending', 'handover_pending'])->count(),
             'foundPosts' => Post::where('type', 'found')->count(),
             'lostPosts' => Post::where('type', 'lost')->count(),
             'adminNotifications' => $admin->unreadNotifications()->latest()->limit(8)->get(),
+            'dailyActivity' => $dailyActivity,
+            'engagement' => $engagement,
             'shortcuts' => $shortcuts,
         ]);
+    }
+
+    private function countByUserType(string $table, string $userColumn, Carbon $start): array
+    {
+        $counts = DB::table($table)
+            ->join('users', 'users.id', '=', "{$table}.{$userColumn}")
+            ->where("{$table}.created_at", '>=', $start)
+            ->selectRaw('users.user_type, COUNT(*) as total')
+            ->groupBy('users.user_type')
+            ->pluck('total', 'users.user_type');
+
+        return [
+            'student' => (int) ($counts['student'] ?? 0),
+            'staff' => (int) ($counts['staff'] ?? 0),
+            'instructor' => (int) ($counts['instructor'] ?? 0),
+        ];
     }
 
     public function communityFeed(Request $request): View
@@ -69,7 +116,6 @@ class DashboardController extends Controller
             'category_id' => ['nullable', 'integer', 'exists:categories,id'],
             'search' => ['nullable', 'string', 'max:150'],
             'post_id' => ['nullable', 'integer', 'exists:posts,id'],
-            'sort' => ['nullable', 'in:latest,oldest'],
         ]);
         $view = $filters['view'] ?? 'posts';
         if ($view === 'people') {
@@ -94,7 +140,11 @@ class DashboardController extends Controller
             ]);
         }
 
-        $posts = Post::with(['author:id,first_name,last_name', 'category:id,name', 'location:id,name', 'images'])
+        $posts = Post::with(['author:id,first_name,last_name,profile_picture_path', 'category:id,name', 'location:id,name', 'images'])
+            ->withCount([
+                'claimRequests',
+                'sightings' => fn ($query) => $query->where('answer', 'yes'),
+            ])
             ->when($filters['post_id'] ?? null, fn ($query, $postId) => $query->whereKey($postId))
             ->when($filters['type'] ?? null, fn ($query, $type) => $query->where('type', $type))
             ->when($filters['status'] ?? null, fn ($query, $status) => $query->where('status', $status))
@@ -108,8 +158,8 @@ class DashboardController extends Controller
                         ->where('first_name', 'like', $term)
                         ->orWhere('last_name', 'like', $term)));
             })
-            ->orderBy('created_at', ($filters['sort'] ?? 'latest') === 'oldest' ? 'asc' : 'desc')
-            ->paginate(25)
+            ->latest()
+            ->paginate(9)
             ->withQueryString();
 
         return view('admin.community-feed', [
@@ -117,6 +167,45 @@ class DashboardController extends Controller
             'posts' => $posts,
             'categories' => Category::orderBy('name')->get(['id', 'name']),
         ]);
+    }
+
+    public function communityPost(Post $post): View
+    {
+        $post->load([
+            'author:id,first_name,last_name',
+            'category:id,name',
+            'location:id,name',
+            'images',
+            'claimRequests' => fn ($query) => $query
+                ->with(['claimant:id,first_name,last_name,tmc_id_no', 'evidenceImages'])
+                ->latest(),
+            'sightings' => fn ($query) => $query
+                ->where('answer', 'yes')
+                ->with('user:id,first_name,last_name')
+                ->orderBy('created_at')
+                ->orderBy('id'),
+        ]);
+        foreach ($post->sightings->groupBy('user_id') as $attempts) {
+            foreach ($attempts->values() as $index => $sighting) {
+                $sighting->attempt_number = $index + 1;
+                $sighting->attempt_total = $attempts->count();
+            }
+        }
+
+        $handovers = Handover::with([
+            'claimRequest.post.author:id,first_name,last_name',
+            'claimRequest.claimant:id,first_name,last_name',
+            'sighting.post.author:id,first_name,last_name',
+            'sighting.user:id,first_name,last_name',
+            'location:id,name',
+        ])
+            ->where(fn ($query) => $query
+                ->whereHas('claimRequest', fn ($claims) => $claims->where('post_id', $post->id))
+                ->orWhereHas('sighting', fn ($sightings) => $sightings->where('post_id', $post->id)))
+            ->latest()
+            ->get();
+
+        return view('admin.community-post', compact('post', 'handovers'));
     }
 
     private function usageDescription(?object $usage): string

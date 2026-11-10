@@ -2,9 +2,9 @@
 
 namespace App\Http\Resources;
 
-use App\Support\PublicMediaUrl;
 use App\Models\ClaimRequest;
 use App\Models\LostSighting;
+use App\Support\PublicMediaUrl;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\JsonResource;
 
@@ -48,20 +48,6 @@ class PostResource extends JsonResource
                 default => false,
             };
         }
-        $canViewOwnerImages = $isMine || $request->user('admin') !== null;
-        if (! $canViewOwnerImages && $authenticatedUserId !== null) {
-            $canViewOwnerImages = $this->type === 'found'
-                ? ClaimRequest::where('post_id', $this->id)
-                    ->where('claimant_id', $authenticatedUserId)
-                    ->where('status', 'approved')
-                    ->where('author_decision', 'approved')
-                    ->exists()
-                : LostSighting::where('post_id', $this->id)
-                    ->where('user_id', $authenticatedUserId)
-                    ->where('answer', 'yes')
-                    ->where('author_decision', 'approved')
-                    ->exists();
-        }
 
         return [
             'id' => $this->id,
@@ -94,10 +80,10 @@ class PostResource extends JsonResource
             'retrieval_request_status' => $isMine
                 ? $this->whenLoaded('latestRetrievalRequest', fn () => $this->latestRetrievalRequest?->status)
                 : null,
-            'images' => $canViewOwnerImages ? $this->images->map(fn ($image): array => [
+            'images' => $this->images->map(fn ($image): array => [
                 'url' => PublicMediaUrl::forPath($image->path),
                 'alt_text' => $image->alt_text,
-            ]) : [],
+            ]),
             'verification_questions' => $this->when(
                 $this->type === 'found',
                 fn () => $this->verificationQuestions->map(fn ($question): array => [

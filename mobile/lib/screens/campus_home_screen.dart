@@ -48,6 +48,93 @@ String _resolveMediaUrl(String url) {
   return rootUri.resolveUri(uri).toString();
 }
 
+class _PostPhotoSlideshow extends StatefulWidget {
+  const _PostPhotoSlideshow({
+    super.key,
+    required this.images,
+    this.expand = false,
+    this.borderRadius = 12,
+  });
+
+  final List<Map<String, String>> images;
+  final bool expand;
+  final double borderRadius;
+
+  @override
+  State<_PostPhotoSlideshow> createState() => _PostPhotoSlideshowState();
+}
+
+class _PostPhotoSlideshowState extends State<_PostPhotoSlideshow> {
+  final PageController _controller = PageController();
+  int _currentPage = 0;
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final photos = widget.images
+        .where((image) => image['url']?.isNotEmpty == true)
+        .toList();
+    if (photos.isEmpty) return const SizedBox.shrink();
+
+    final slideshow = ClipRRect(
+      borderRadius: BorderRadius.circular(widget.borderRadius),
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          PageView.builder(
+            controller: _controller,
+            itemCount: photos.length,
+            onPageChanged: (page) => setState(() => _currentPage = page),
+            itemBuilder: (context, index) => Image.network(
+              _resolveMediaUrl(photos[index]['url']!),
+              fit: BoxFit.cover,
+              semanticLabel: photos[index]['alt_text'],
+              errorBuilder: (context, _, _) => ColoredBox(
+                color: Theme.of(context).colorScheme.surfaceContainerHighest,
+                child: Center(
+                  child: Icon(
+                    Icons.image_not_supported_outlined,
+                    color: Theme.of(context).colorScheme.primary,
+                  ),
+                ),
+              ),
+            ),
+          ),
+          if (photos.length > 1)
+            Positioned(
+              right: 6,
+              bottom: 6,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+                decoration: BoxDecoration(
+                  color: Colors.black54,
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                child: Text(
+                  '${_currentPage + 1}/${photos.length}',
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 9,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+
+    return widget.expand
+        ? SizedBox.expand(child: slideshow)
+        : AspectRatio(aspectRatio: 1, child: slideshow);
+  }
+}
+
 Future<void> _viewEvidence(
   BuildContext context,
   String title,
@@ -114,8 +201,6 @@ class CampusHomeScreen extends StatefulWidget {
     required this.api,
     required this.auth,
     required this.firstName,
-    required this.isDarkMode,
-    required this.onToggleTheme,
     required this.onSignedOut,
     super.key,
   });
@@ -123,8 +208,6 @@ class CampusHomeScreen extends StatefulWidget {
   final ApiClient api;
   final AuthService auth;
   final String firstName;
-  final bool isDarkMode;
-  final VoidCallback onToggleTheme;
   final VoidCallback onSignedOut;
 
   @override
@@ -133,15 +216,14 @@ class CampusHomeScreen extends StatefulWidget {
 
 class _CampusHomeScreenState extends State<CampusHomeScreen> {
   int _tab = 0;
-  String _type = '';
   String _search = '';
   String _status = '';
-  String _sort = 'latest';
   int? _categoryId;
   int _communityMode = 0;
   Future<List<CampusPost>>? _posts;
   Future<List<Map<String, dynamic>>>? _people;
   List<Map<String, dynamic>> _categories = [];
+  Timer? _feedSearchTimer;
   Timer? _peopleSearchTimer;
   final TextEditingController _homeSearchController = TextEditingController();
   final TextEditingController _peopleSearchController = TextEditingController();
@@ -164,11 +246,10 @@ class _CampusHomeScreenState extends State<CampusHomeScreen> {
     final response = await widget.api.dio.get<Map<String, dynamic>>(
       '/posts',
       queryParameters: {
-        if (_type.isNotEmpty) 'type': _type,
+        'type': _communityMode == 1 ? 'found' : 'lost',
         if (_status.isNotEmpty) 'status': _status,
         if (_categoryId != null) 'category_id': _categoryId,
         if (_search.trim().isNotEmpty) 'search': _search.trim(),
-        'sort': _sort,
       },
     );
     final data = response.data?['data'];
@@ -183,6 +264,24 @@ class _CampusHomeScreenState extends State<CampusHomeScreen> {
 
   void _refreshFeed() {
     setState(() {
+      _posts = _fetchPosts();
+    });
+  }
+
+  void _scheduleFeedSearch(String value) {
+    _feedSearchTimer?.cancel();
+    _feedSearchTimer = Timer(const Duration(milliseconds: 300), () {
+      _applyFeedSearch(value);
+    });
+  }
+
+  void _applyFeedSearch(String value) {
+    _feedSearchTimer?.cancel();
+    if (!mounted) return;
+    final search = value.trim();
+    if (search == _search) return;
+    setState(() {
+      _search = search;
       _posts = _fetchPosts();
     });
   }
@@ -270,10 +369,8 @@ class _CampusHomeScreenState extends State<CampusHomeScreen> {
       _openHandovers = false;
       _returnToInboxTab = returnInboxTab;
       _communityMode = 0;
-      _type = '';
       _search = '';
       _status = '';
-      _sort = 'latest';
       _categoryId = null;
       _posts = Future.value([post]);
     });
@@ -618,6 +715,7 @@ class _CampusHomeScreenState extends State<CampusHomeScreen> {
   void dispose() {
     _homeSearchController.dispose();
     _peopleSearchController.dispose();
+    _feedSearchTimer?.cancel();
     _peopleSearchTimer?.cancel();
     _feedScrollController.dispose();
     super.dispose();
@@ -698,15 +796,6 @@ class _CampusHomeScreenState extends State<CampusHomeScreen> {
             Text(titles[_tab]),
           ],
         ),
-        actions: [
-          IconButton(
-            tooltip: widget.isDarkMode
-                ? 'Switch to light mode'
-                : 'Switch to dark mode',
-            onPressed: widget.onToggleTheme,
-            icon: Icon(widget.isDarkMode ? Icons.light_mode : Icons.dark_mode),
-          ),
-        ],
       ),
       body: IndexedStack(index: _tab, children: pages),
       bottomNavigationBar: NavigationBar(
@@ -759,24 +848,33 @@ class _CampusHomeScreenState extends State<CampusHomeScreen> {
               segments: const [
                 ButtonSegment(
                   value: 0,
-                  label: Text('Posts'),
-                  icon: Icon(Icons.article_outlined),
+                  label: Text('Lost'),
+                  icon: Icon(Icons.search),
                 ),
                 ButtonSegment(
                   value: 1,
+                  label: Text('Found'),
+                  icon: Icon(Icons.check_circle_outline),
+                ),
+                ButtonSegment(
+                  value: 2,
                   label: Text('People'),
                   icon: Icon(Icons.people_outline),
                 ),
               ],
               selected: {_communityMode},
-              onSelectionChanged: (selection) => setState(() {
-                _communityMode = selection.first;
-              }),
+              onSelectionChanged: (selection) {
+                final mode = selection.first;
+                setState(() {
+                  _communityMode = mode;
+                  if (mode < 2) _posts = _fetchPosts();
+                });
+              },
             ),
           ),
         ),
         SliverToBoxAdapter(
-          child: _communityMode == 0
+          child: _communityMode < 2
               ? Padding(
                   padding: const EdgeInsets.fromLTRB(16, 10, 16, 6),
                   child: Card(
@@ -798,7 +896,7 @@ class _CampusHomeScreenState extends State<CampusHomeScreen> {
                                   crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
                                     Text(
-                                      'Browse community posts',
+                                      'Browse ${_communityMode == 0 ? 'lost' : 'found'} items',
                                       style: TextStyle(
                                         fontSize: 17,
                                         fontWeight: FontWeight.w800,
@@ -809,7 +907,7 @@ class _CampusHomeScreenState extends State<CampusHomeScreen> {
                                     ),
                                     SizedBox(height: 3),
                                     Text(
-                                      'Search, filter, and browse campus listings.',
+                                      'Search, filter, and browse ${_communityMode == 0 ? 'lost' : 'found'} items.',
                                       style: TextStyle(
                                         fontSize: 11,
                                         color: Theme.of(context)
@@ -834,7 +932,7 @@ class _CampusHomeScreenState extends State<CampusHomeScreen> {
                                     borderRadius: BorderRadius.circular(20),
                                   ),
                                   child: Text(
-                                    '${snapshot.data?.length ?? 0} posts',
+                                    '${snapshot.data?.length ?? 0} items',
                                     style: TextStyle(
                                       color: Theme.of(context)
                                           .colorScheme
@@ -851,7 +949,8 @@ class _CampusHomeScreenState extends State<CampusHomeScreen> {
                           TextField(
                             controller: _homeSearchController,
                             textInputAction: TextInputAction.search,
-                            onSubmitted: (_) => _applyFeedFilters(),
+                            onChanged: _scheduleFeedSearch,
+                            onSubmitted: _applyFeedSearch,
                             decoration: const InputDecoration(
                               labelText: 'Search',
                               hintText: 'Item, description, or person',
@@ -862,9 +961,7 @@ class _CampusHomeScreenState extends State<CampusHomeScreen> {
                           const SizedBox(height: 10),
                           LayoutBuilder(
                             builder: (context, constraints) {
-                              final columns = constraints.maxWidth >= 660
-                                  ? 4
-                                  : 2;
+                              const columns = 2;
                               final gap = 8.0;
                               final width =
                                   (constraints.maxWidth - gap * (columns - 1)) /
@@ -873,37 +970,6 @@ class _CampusHomeScreenState extends State<CampusHomeScreen> {
                                 spacing: gap,
                                 runSpacing: 8,
                                 children: [
-                                  SizedBox(
-                                    width: width,
-                                    child: DropdownButtonFormField<String>(
-                                      initialValue: _type,
-                                      isExpanded: true,
-                                      decoration: const InputDecoration(
-                                        labelText: 'Kind',
-                                        isDense: true,
-                                        contentPadding: EdgeInsets.symmetric(
-                                          horizontal: 12,
-                                          vertical: 8,
-                                        ),
-                                      ),
-                                      items: const [
-                                        DropdownMenuItem(
-                                          value: '',
-                                          child: Text('Lost and found'),
-                                        ),
-                                        DropdownMenuItem(
-                                          value: 'lost',
-                                          child: Text('Lost'),
-                                        ),
-                                        DropdownMenuItem(
-                                          value: 'found',
-                                          child: Text('Found'),
-                                        ),
-                                      ],
-                                      onChanged: (value) =>
-                                          setState(() => _type = value ?? ''),
-                                    ),
-                                  ),
                                   SizedBox(
                                     width: width,
                                     child: DropdownButtonFormField<String>(
@@ -935,8 +1001,12 @@ class _CampusHomeScreenState extends State<CampusHomeScreen> {
                                           child: Text('Handover pending'),
                                         ),
                                       ],
-                                      onChanged: (value) =>
-                                          setState(() => _status = value ?? ''),
+                                      onChanged: (value) {
+                                        setState(() {
+                                          _status = value ?? '';
+                                          _posts = _fetchPosts();
+                                        });
+                                      },
                                     ),
                                   ),
                                   SizedBox(
@@ -968,73 +1038,15 @@ class _CampusHomeScreenState extends State<CampusHomeScreen> {
                                           ),
                                         ),
                                       ],
-                                      onChanged: (value) =>
-                                          setState(() => _categoryId = value),
-                                    ),
-                                  ),
-                                  SizedBox(
-                                    width: width,
-                                    child: DropdownButtonFormField<String>(
-                                      initialValue: _sort,
-                                      isExpanded: true,
-                                      decoration: const InputDecoration(
-                                        labelText: 'Order',
-                                        isDense: true,
-                                        contentPadding: EdgeInsets.symmetric(
-                                          horizontal: 12,
-                                          vertical: 8,
-                                        ),
-                                      ),
-                                      items: const [
-                                        DropdownMenuItem(
-                                          value: 'latest',
-                                          child: Text('Newest first'),
-                                        ),
-                                        DropdownMenuItem(
-                                          value: 'oldest',
-                                          child: Text('Oldest first'),
-                                        ),
-                                      ],
-                                      onChanged: (value) => setState(
-                                        () => _sort = value ?? 'latest',
-                                      ),
+                                      onChanged: (value) => setState(() {
+                                        _categoryId = value;
+                                        _posts = _fetchPosts();
+                                      }),
                                     ),
                                   ),
                                 ],
                               );
                             },
-                          ),
-                          const SizedBox(height: 10),
-                          Wrap(
-                            spacing: 8,
-                            children: [
-                              FilledButton(
-                                onPressed: _applyFeedFilters,
-                                style: FilledButton.styleFrom(
-                                  minimumSize: const Size(0, 36),
-                                  padding: const EdgeInsets.symmetric(
-                                    horizontal: 14,
-                                    vertical: 6,
-                                  ),
-                                  tapTargetSize:
-                                      MaterialTapTargetSize.shrinkWrap,
-                                ),
-                                child: const Text('Apply filters'),
-                              ),
-                              OutlinedButton(
-                                onPressed: _clearFeedFilters,
-                                style: OutlinedButton.styleFrom(
-                                  minimumSize: const Size(0, 36),
-                                  padding: const EdgeInsets.symmetric(
-                                    horizontal: 14,
-                                    vertical: 6,
-                                  ),
-                                  tapTargetSize:
-                                      MaterialTapTargetSize.shrinkWrap,
-                                ),
-                                child: const Text('Clear'),
-                              ),
-                            ],
                           ),
                         ],
                       ),
@@ -1053,29 +1065,9 @@ class _CampusHomeScreenState extends State<CampusHomeScreen> {
                   ),
                 ),
         ),
-        if (_communityMode == 0) _feedPostsSliver() else _feedPeopleSliver(),
+        if (_communityMode < 2) _feedPostsSliver() else _feedPeopleSliver(),
       ],
     );
-  }
-
-  void _applyFeedFilters() {
-    FocusScope.of(context).unfocus();
-    setState(() {
-      _search = _homeSearchController.text.trim();
-      _posts = _fetchPosts();
-    });
-  }
-
-  void _clearFeedFilters() {
-    _homeSearchController.clear();
-    setState(() {
-      _search = '';
-      _type = '';
-      _status = '';
-      _categoryId = null;
-      _sort = 'latest';
-      _posts = _fetchPosts();
-    });
   }
 
   Widget _feedPostsSliver() {
@@ -1110,55 +1102,28 @@ class _CampusHomeScreenState extends State<CampusHomeScreen> {
               icon: Icons.search_off,
               title: 'No posts found',
               message: 'Try another search or check back later.',
-              action: OutlinedButton(
-                onPressed: _clearFeedFilters,
-                child: const Text('Clear filters'),
-              ),
             ),
           );
         }
         return SliverPadding(
           padding: const EdgeInsets.fromLTRB(16, 8, 16, 20),
-          sliver: SliverList(
-            delegate: SliverChildBuilderDelegate((context, index) {
-              if (index.isOdd) return const SizedBox(height: 12);
-              final post = _postWithReaction(posts[index ~/ 2]);
-              return _PostCard(
-                post: post,
-                onTapAuthor: post.authorId == null
-                    ? () {}
-                    : () => _openUserProfile(post.authorId!),
-                onOwnerEdit: () => _editOwnedPost(post),
-                onOwnerDelete: () => _deleteOwnedPost(post),
-                onRequestRetrieved: () => _requestPostRetrieved(post),
-                onReport: () =>
-                    unawaited(_reportPost(context, widget.api, post)),
-                onTap: () => showModalBottomSheet<void>(
-                  context: context,
-                  isScrollControlled: true,
-                  builder: (_) => _PostDetailSheet(
-                    api: widget.api,
+          sliver: SliverToBoxAdapter(
+            child: _FlexiblePostGrid(
+              itemCount: posts.length,
+              itemBuilder: (context, index) {
+                  final post = _postWithReaction(posts[index]);
+                  return _PostCard(
                     post: post,
-                    onOpenProfile: _openUserProfile,
-                    onClaimChanged: _refreshFeed,
-                    onReactionChanged: (reaction, count) {
-                      if (!mounted) return;
-                      setState(() {
-                        _reactionOverrides[post.id] = _ReactionState(
-                          count,
-                          reaction,
-                        );
-                      });
-                    },
-                  ),
-                ),
-                onReact: () => _reactToPost(post),
-                onShare: () => _sharePost(post),
-                onPrimaryAction: () {
-                  if (post.status == 'handover_pending') {
-                    _openHandoverInbox();
-                  } else {
-                    showModalBottomSheet<void>(
+                    compact: true,
+                    onTapAuthor: post.authorId == null
+                        ? () {}
+                        : () => _openUserProfile(post.authorId!),
+                    onOwnerEdit: () => _editOwnedPost(post),
+                    onOwnerDelete: () => _deleteOwnedPost(post),
+                    onRequestRetrieved: () => _requestPostRetrieved(post),
+                    onReport: () =>
+                        unawaited(_reportPost(context, widget.api, post)),
+                    onTap: () => showModalBottomSheet<void>(
                       context: context,
                       isScrollControlled: true,
                       builder: (_) => _PostDetailSheet(
@@ -1176,11 +1141,37 @@ class _CampusHomeScreenState extends State<CampusHomeScreen> {
                           });
                         },
                       ),
-                    );
-                  }
-                },
-              );
-            }, childCount: posts.length * 2 - 1),
+                    ),
+                    onReact: () => _reactToPost(post),
+                    onShare: () => _sharePost(post),
+                    onPrimaryAction: () {
+                      if (post.status == 'handover_pending') {
+                        _openHandoverInbox();
+                      } else {
+                        showModalBottomSheet<void>(
+                          context: context,
+                          isScrollControlled: true,
+                          builder: (_) => _PostDetailSheet(
+                            api: widget.api,
+                            post: post,
+                            onOpenProfile: _openUserProfile,
+                            onClaimChanged: _refreshFeed,
+                            onReactionChanged: (reaction, count) {
+                              if (!mounted) return;
+                              setState(() {
+                                _reactionOverrides[post.id] = _ReactionState(
+                                  count,
+                                  reaction,
+                                );
+                              });
+                            },
+                          ),
+                        );
+                      }
+                    },
+                  );
+              },
+            ),
           ),
         );
       },
@@ -1270,9 +1261,41 @@ class _CampusHomeScreenState extends State<CampusHomeScreen> {
   }
 }
 
+class _FlexiblePostGrid extends StatelessWidget {
+  const _FlexiblePostGrid({
+    required this.itemCount,
+    required this.itemBuilder,
+  });
+
+  final int itemCount;
+  final Widget Function(BuildContext, int) itemBuilder;
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        const spacing = 12.0;
+        final itemWidth = (constraints.maxWidth - spacing) / 2;
+        return Wrap(
+          spacing: spacing,
+          runSpacing: spacing,
+          children: [
+            for (var index = 0; index < itemCount; index++)
+              SizedBox(
+                width: itemWidth,
+                child: itemBuilder(context, index),
+              ),
+          ],
+        );
+      },
+    );
+  }
+}
+
 class _PostCard extends StatelessWidget {
   const _PostCard({
     required this.post,
+    this.compact = false,
     required this.onTapAuthor,
     required this.onOwnerEdit,
     required this.onOwnerDelete,
@@ -1284,6 +1307,7 @@ class _PostCard extends StatelessWidget {
     required this.onReport,
   });
   final CampusPost post;
+  final bool compact;
   final VoidCallback onTapAuthor;
   final VoidCallback onOwnerEdit;
   final VoidCallback onOwnerDelete;
@@ -1314,7 +1338,7 @@ class _PostCard extends StatelessWidget {
               ? 'Check claim status'
               : 'Claim'
         : 'I found it';
-    return Card(
+    final card = Card(
       clipBehavior: Clip.antiAlias,
       elevation: 2,
       shadowColor: const Color(0x223F278A),
@@ -1322,261 +1346,383 @@ class _PostCard extends StatelessWidget {
         borderRadius: BorderRadius.circular(20),
         side: BorderSide(color: tagColor.withValues(alpha: .3)),
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(14, 10, 6, 10),
-            child: Row(
+      child: compact
+          ? _compactCard(context, found, tagColor)
+          : Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Expanded(
-                  child: InkWell(
-                    onTap: onTapAuthor,
-                    borderRadius: BorderRadius.circular(24),
-                    child: Row(
-                      children: [
-                        CircleAvatar(
-                          radius: 19,
-                          backgroundColor: Theme.of(context)
-                              .colorScheme
-                              .surfaceContainerHighest,
-                          backgroundImage: post.authorProfilePictureUrl == null
-                              ? null
-                              : NetworkImage(post.authorProfilePictureUrl!),
-                          child: post.authorProfilePictureUrl == null
-                              ? Text(
-                                  post.authorFirstName.isEmpty
-                                      ? '?'
-                                      : post.authorFirstName[0].toUpperCase(),
-                                  style: TextStyle(
-                                    color: Theme.of(context)
-                                        .colorScheme
-                                        .primary,
-                                    fontWeight: FontWeight.w700,
-                                  ),
-                                )
-                              : null,
+                _postAuthorHeader(context),
+                LayoutBuilder(
+                  builder: (context, constraints) {
+                    final wide = constraints.maxWidth >= 700;
+                    final hasImage = post.images.any(
+                      (image) => image['url']?.isNotEmpty == true,
+                    );
+                    final details = _postDetails(
+                      context,
+                      found,
+                      tagColor,
+                      tagSurface,
+                      neutralSurface,
+                    );
+                    if (wide) {
+                      return SizedBox(
+                        height: 260,
+                        child: Row(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            if (hasImage)
+                              SizedBox(width: 260, child: _postImage(context)),
+                            Expanded(child: details),
+                          ],
                         ),
-                        const SizedBox(width: 9),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                '${post.authorFirstName} ${post.authorLastName}'
-                                    .trim(),
-                                style: const TextStyle(
-                                  fontWeight: FontWeight.w700,
-                                ),
-                              ),
-                              Text(
-                                _timeAgo(post.createdAt),
-                                style: TextStyle(
-                                  fontSize: 11,
-                                  color: Theme.of(context)
-                                      .colorScheme
-                                      .onSurfaceVariant,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-                PopupMenuButton<String>(
-                  tooltip: 'Post menu',
-                  onSelected: (value) {
-                    switch (value) {
-                      case 'details':
-                        onTap();
-                        break;
-                      case 'report':
-                        onReport();
-                        break;
-                      case 'edit':
-                        onOwnerEdit();
-                        break;
-                      case 'delete':
-                        onOwnerDelete();
-                        break;
-                      case 'retrieved':
-                        onRequestRetrieved();
-                        break;
+                      );
                     }
+                    return Column(
+                      children: [
+                        if (hasImage)
+                          InkWell(onTap: onTap, child: _postImage(context)),
+                        details,
+                      ],
+                    );
                   },
-                  itemBuilder: (_) => [
-                    const PopupMenuItem(
-                      value: 'details',
-                      child: ListTile(
-                        leading: Icon(Icons.open_in_new),
-                        title: Text('View post'),
-                      ),
-                    ),
-                    if (post.isMine) ...[
-                      PopupMenuItem(
-                        value: 'edit',
-                        enabled:
-                            post.status == 'active' &&
-                            post.retrievalRequestStatus != 'pending',
-                        child: const ListTile(
-                          leading: Icon(Icons.edit_outlined),
-                          title: Text('Edit post'),
+                ),
+                const Divider(height: 1, indent: 14, endIndent: 14),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(8, 2, 8, 2),
+                  child: Row(
+                    children: [
+                      TextButton.icon(
+                        onPressed: onReact,
+                        icon: Icon(
+                          post.myReaction == 'like'
+                              ? Icons.favorite
+                              : Icons.favorite_border,
+                          color: post.myReaction == 'like'
+                              ? Theme.of(context).colorScheme.primary
+                              : null,
+                          size: 19,
                         ),
+                        label: Text('${post.reactionsCount}'),
                       ),
-                      if (['active', 'archived'].contains(post.status))
-                        PopupMenuItem(
-                          value: 'retrieved',
-                          enabled: post.retrievalRequestStatus != 'pending',
-                          child: ListTile(
-                            leading: const Icon(Icons.task_alt),
-                            title: Text(
-                              post.retrievalRequestStatus == 'pending'
-                                  ? 'Retrieval request pending'
-                                  : 'Request mark as retrieved',
+                      TextButton.icon(
+                        onPressed: onTap,
+                        icon: const Icon(Icons.mode_comment_outlined, size: 19),
+                        label: Text('${post.commentsCount}'),
+                      ),
+                      IconButton(
+                        tooltip: 'Share post',
+                        onPressed: onShare,
+                        icon: const Icon(Icons.share_outlined, size: 19),
+                      ),
+                      const Spacer(),
+                      if ((post.status == 'handover_pending' &&
+                              post.isHandoverParticipant) ||
+                          (['active', 'claim_pending'].contains(post.status) &&
+                              !post.isMine &&
+                              (post.type != 'found' ||
+                                  post.status != 'handover_pending')))
+                        Flexible(
+                          child: FilledButton.tonal(
+                            onPressed: onPrimaryAction,
+                            style: FilledButton.styleFrom(
+                              minimumSize: const Size(0, 38),
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 8,
+                              ),
+                              visualDensity: VisualDensity.compact,
+                            ),
+                            child: Text(
+                              primaryLabel,
+                              maxLines: 1,
+                              softWrap: false,
+                              overflow: TextOverflow.ellipsis,
                             ),
                           ),
                         ),
-                      const PopupMenuItem(
-                        value: 'delete',
-                        child: ListTile(
-                          leading: Icon(Icons.delete_outline),
-                          title: Text('Delete post'),
-                        ),
-                      ),
-                    ] else
-                      const PopupMenuItem(
-                        value: 'report',
-                        child: ListTile(
-                          leading: Icon(Icons.flag_outlined),
-                          title: Text('Report post'),
-                        ),
-                      ),
-                  ],
-                ),
-              ],
-            ),
-          ),
-          LayoutBuilder(
-            builder: (context, constraints) {
-              final wide = constraints.maxWidth >= 700;
-              final hasImage =
-                  post.images.isNotEmpty &&
-                  post.images.first['url']!.isNotEmpty;
-              final details = _postDetails(
-                context,
-                found,
-                tagColor,
-                tagSurface,
-                neutralSurface,
-              );
-              if (wide) {
-                return SizedBox(
-                  height: 260,
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      if (hasImage)
-                        SizedBox(
-                          width: constraints.maxWidth * .36,
-                          child: _postImage(),
-                        ),
-                      Expanded(child: details),
                     ],
                   ),
-                );
-              }
-              return Column(
-                children: [
-                  if (hasImage)
-                    InkWell(
-                      onTap: onTap,
-                      child: AspectRatio(
-                        aspectRatio: 1.48,
-                        child: _postImage(),
-                      ),
-                    ),
-                  details,
-                ],
-              );
-            },
-          ),
-          const Divider(height: 1, indent: 14, endIndent: 14),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(8, 2, 8, 2),
-            child: Row(
-              children: [
-                TextButton.icon(
-                  onPressed: onReact,
-                  icon: Icon(
-                    post.myReaction == 'like'
-                        ? Icons.favorite
-                        : Icons.favorite_border,
-                    color: post.myReaction == 'like'
-                        ? Theme.of(context).colorScheme.primary
-                        : null,
-                    size: 19,
-                  ),
-                  label: Text('${post.reactionsCount}'),
                 ),
-                TextButton.icon(
-                  onPressed: onTap,
-                  icon: const Icon(Icons.mode_comment_outlined, size: 19),
-                  label: Text('${post.commentsCount}'),
-                ),
-                IconButton(
-                  tooltip: 'Share post',
-                  onPressed: onShare,
-                  icon: const Icon(Icons.share_outlined, size: 19),
-                ),
-                const Spacer(),
-                if ((post.status == 'handover_pending' &&
-                        post.isHandoverParticipant) ||
-                    (['active', 'claim_pending'].contains(post.status) &&
-                        !post.isMine &&
-                        (post.type != 'found' ||
-                            post.status != 'handover_pending')))
-                  Flexible(
-                    child: FilledButton.tonal(
-                      onPressed: onPrimaryAction,
-                      style: FilledButton.styleFrom(
-                        minimumSize: const Size(0, 38),
-                        padding: const EdgeInsets.symmetric(horizontal: 8),
-                        visualDensity: VisualDensity.compact,
-                      ),
-                      child: Text(
-                        primaryLabel,
-                        maxLines: 1,
-                        softWrap: false,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ),
-                  ),
               ],
             ),
+    );
+    return card;
+  }
+
+  Widget _compactCard(
+    BuildContext context,
+    bool found,
+    Color tagColor,
+  ) {
+    final hasImage = post.images.any(
+      (image) => image['url']?.isNotEmpty == true,
+    );
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        AspectRatio(
+          aspectRatio: 1,
+          child: hasImage
+              ? InkWell(onTap: onTap, child: _postImage(context, expand: true))
+              : _postImagePlaceholder(context, found),
+        ),
+        _postAuthorHeader(context, dense: true),
+        InkWell(
+          onTap: onTap,
+          child: _compactPostDetails(
+            context,
+            found,
+            tagColor,
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _postAuthorHeader(BuildContext context, {bool dense = false}) {
+    final avatarRadius = dense ? 12.0 : 19.0;
+    return Padding(
+      padding: dense
+          ? const EdgeInsets.fromLTRB(7, 4, 2, 1)
+          : const EdgeInsets.fromLTRB(14, 10, 6, 10),
+      child: Row(
+        children: [
+          Expanded(
+            child: InkWell(
+              onTap: onTapAuthor,
+              borderRadius: BorderRadius.circular(24),
+              child: Row(
+                children: [
+                  CircleAvatar(
+                    radius: avatarRadius,
+                    backgroundColor: Theme.of(context)
+                        .colorScheme
+                        .surfaceContainerHighest,
+                    backgroundImage: post.authorProfilePictureUrl == null
+                        ? null
+                        : NetworkImage(post.authorProfilePictureUrl!),
+                    child: post.authorProfilePictureUrl == null
+                        ? Text(
+                            post.authorFirstName.isEmpty
+                                ? '?'
+                                : post.authorFirstName[0].toUpperCase(),
+                            style: TextStyle(
+                              color: Theme.of(context).colorScheme.primary,
+                              fontWeight: FontWeight.w700,
+                              fontSize: dense ? 10 : null,
+                            ),
+                          )
+                        : null,
+                  ),
+                  SizedBox(width: dense ? 6 : 9),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          '${post.authorFirstName} ${post.authorLastName}'
+                              .trim(),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontWeight: FontWeight.w700,
+                            fontSize: dense ? 12 : null,
+                          ),
+                        ),
+                        if (!dense)
+                          Text(
+                            _timeAgo(post.createdAt),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              fontSize: 11,
+                              color: Theme.of(context)
+                                  .colorScheme
+                                  .onSurfaceVariant,
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          PopupMenuButton<String>(
+            tooltip: 'Post menu',
+            padding: EdgeInsets.zero,
+            constraints: BoxConstraints(
+              minWidth: dense ? 32 : 42,
+              minHeight: dense ? 32 : 42,
+            ),
+            onSelected: (value) {
+              switch (value) {
+                case 'details':
+                  onTap();
+                  break;
+                case 'report':
+                  onReport();
+                  break;
+                case 'edit':
+                  onOwnerEdit();
+                  break;
+                case 'delete':
+                  onOwnerDelete();
+                  break;
+                case 'retrieved':
+                  onRequestRetrieved();
+                  break;
+              }
+            },
+            itemBuilder: (_) => [
+              const PopupMenuItem(
+                value: 'details',
+                child: ListTile(
+                  leading: Icon(Icons.open_in_new),
+                  title: Text('View post'),
+                ),
+              ),
+              if (post.isMine) ...[
+                PopupMenuItem(
+                  value: 'edit',
+                  enabled:
+                      post.status == 'active' &&
+                      post.retrievalRequestStatus != 'pending',
+                  child: const ListTile(
+                    leading: Icon(Icons.edit_outlined),
+                    title: Text('Edit post'),
+                  ),
+                ),
+                if (['active', 'archived'].contains(post.status))
+                  PopupMenuItem(
+                    value: 'retrieved',
+                    enabled: post.retrievalRequestStatus != 'pending',
+                    child: ListTile(
+                      leading: const Icon(Icons.task_alt),
+                      title: Text(
+                        post.retrievalRequestStatus == 'pending'
+                            ? 'Retrieval request pending'
+                            : 'Request mark as retrieved',
+                      ),
+                    ),
+                  ),
+                const PopupMenuItem(
+                  value: 'delete',
+                  child: ListTile(
+                    leading: Icon(Icons.delete_outline),
+                    title: Text('Delete post'),
+                  ),
+                ),
+              ] else
+                const PopupMenuItem(
+                  value: 'report',
+                  child: ListTile(
+                    leading: Icon(Icons.flag_outlined),
+                    title: Text('Report post'),
+                  ),
+                ),
+            ],
           ),
         ],
       ),
     );
   }
 
-  Widget _postImage() {
+  Widget _postImagePlaceholder(BuildContext context, bool found) {
+    final color = found ? CampusTheme.found : CampusTheme.lost;
+    final surface = found ? CampusTheme.foundSurface : CampusTheme.lostSurface;
     return InkWell(
       onTap: onTap,
-      child: Image.network(
-        _resolveMediaUrl(post.images.first['url']!),
-        fit: BoxFit.cover,
-        semanticLabel: post.images.first['alt_text'],
-        errorBuilder: (context, _, _) => ColoredBox(
-          color: Theme.of(context).colorScheme.surfaceContainerHighest,
+      child: AspectRatio(
+        aspectRatio: 1,
+        child: ColoredBox(
+          color: surface,
           child: Center(
             child: Icon(
-              Icons.image_not_supported_outlined,
-              color: Theme.of(context).colorScheme.primary,
+              found ? Icons.inventory_2_outlined : Icons.search_rounded,
+              size: 40,
+              color: color,
             ),
           ),
         ),
+      ),
+    );
+  }
+
+  Widget _postImage(BuildContext context, {bool expand = false}) {
+    return _PostPhotoSlideshow(
+      key: ValueKey('post-images-${post.id}'),
+      images: post.images,
+      expand: expand,
+      borderRadius: expand ? 0 : 12,
+    );
+  }
+
+  Widget _compactPostDetails(
+    BuildContext context,
+    bool found,
+    Color tagColor,
+  ) {
+    final muted = Theme.of(context).colorScheme.onSurfaceVariant;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(7, 2, 7, 6),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            post.itemName,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700),
+          ),
+          const SizedBox(height: 3),
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  found ? 'FOUND' : 'LOST',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: tagColor,
+                    fontSize: 8,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ),
+              const Text(' · ', style: TextStyle(fontSize: 8)),
+              Expanded(
+                flex: 2,
+                child: Text(
+                  post.status.replaceAll('_', ' ').toUpperCase(),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: muted,
+                    fontSize: 8,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+              const Text(' · ', style: TextStyle(fontSize: 8)),
+              Expanded(
+                flex: 2,
+                child: Text(
+                  post.category,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: muted,
+                    fontSize: 8,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ],
       ),
     );
   }
@@ -1613,9 +1759,7 @@ class _PostCard extends StatelessWidget {
                 _PostTag(
                   label:
                       'RETRIEVAL ${post.retrievalRequestStatus!.toUpperCase()}',
-                  color: dark
-                      ? CampusTheme.otherDark
-                      : CampusTheme.other,
+                  color: dark ? CampusTheme.otherDark : CampusTheme.other,
                   surface: neutralSurface,
                 ),
               Text(
@@ -2807,26 +2951,10 @@ class _PostDetailSheetState extends State<_PostDetailSheet> {
               const SizedBox(height: 8),
               Text('${post.location} · ${post.eventDate}'),
               const SizedBox(height: 16),
-              if (post.images.isNotEmpty &&
-                  post.images.first['url']!.isNotEmpty)
-                ClipRRect(
-                  borderRadius: BorderRadius.circular(12),
-                  child: AspectRatio(
-                    aspectRatio: 4 / 3,
-                    child: Image.network(
-                      _resolveMediaUrl(post.images.first['url']!),
-                      fit: BoxFit.cover,
-                      semanticLabel: post.images.first['alt_text'],
-                      errorBuilder: (context, _, _) => ColoredBox(
-                        color: Theme.of(context)
-                            .colorScheme
-                            .surfaceContainerHighest,
-                        child: Center(
-                          child: Icon(Icons.image_not_supported_outlined),
-                        ),
-                      ),
-                    ),
-                  ),
+              if (post.images.any((image) => image['url']?.isNotEmpty == true))
+                _PostPhotoSlideshow(
+                  key: ValueKey('detail-post-images-${post.id}'),
+                  images: post.images,
                 ),
               const SizedBox(height: 12),
               Text(post.description),
@@ -3791,7 +3919,7 @@ class _CreatePostScreenState extends State<CreatePostScreen> {
   Future<void> _submit() async {
     if (_busy || _editDataFailed || !_formKey.currentState!.validate()) return;
     if (_categoryId == null || _locationId == null) {
-      setState(() => _error = 'Choose a category and campus location.');
+      setState(() => _error = 'Choose a category and place.');
       return;
     }
     if (_type == 'found' &&
@@ -4058,7 +4186,7 @@ class _CreatePostScreenState extends State<CreatePostScreen> {
         const SizedBox(height: 12),
         DropdownButtonFormField<int>(
           initialValue: _locationId,
-          decoration: const InputDecoration(labelText: 'Campus area *'),
+          decoration: const InputDecoration(labelText: 'Place *'),
           items: _locations
               .map(
                 (item) => DropdownMenuItem<int>(
@@ -4661,7 +4789,7 @@ class _InboxScreenState extends State<InboxScreen> {
             icon: Icons.inbox_rounded,
             title: 'Your campus inbox',
             subtitle: 'Updates, chats, evidence, claims, and handovers.',
-            tint: Color(0xFF7C44BC),
+            tint: CampusTheme.blue,
           ),
         ),
         Row(
@@ -7436,34 +7564,33 @@ class _PublicProfileScreenState extends State<PublicProfileScreen> {
                 for (final post in posts)
                   _applyReaction(post, _reactionOverrides),
               ];
-              return Column(
-                children: [
-                  for (final post in displayPosts)
-                    Padding(
-                      padding: const EdgeInsets.only(bottom: 12),
-                      child: _PostCard(
-                        post: post,
-                        onTapAuthor: () {},
-                        onOwnerEdit: () {},
-                        onOwnerDelete: () {},
-                        onRequestRetrieved: () {},
-                        onReport: () =>
-                            unawaited(_reportPost(context, widget.api, post)),
-                        onTap: () => _showPost(post),
-                        onReact: () => _react(post),
-                        onShare: () => SharePlus.instance.share(
-                          ShareParams(
-                            text:
-                                '${post.type.toUpperCase()} item: ${post.itemName}\n'
-                                '${post.description}\n'
-                                'Posted on CampusLF.',
-                            subject: 'CampusLF ${post.type} item',
-                          ),
+              return _FlexiblePostGrid(
+                itemCount: displayPosts.length,
+                itemBuilder: (context, index) {
+                  final post = displayPosts[index];
+                  return _PostCard(
+                      post: post,
+                      compact: true,
+                      onTapAuthor: () {},
+                      onOwnerEdit: () {},
+                      onOwnerDelete: () {},
+                      onRequestRetrieved: () {},
+                      onReport: () =>
+                          unawaited(_reportPost(context, widget.api, post)),
+                      onTap: () => _showPost(post),
+                      onReact: () => _react(post),
+                      onShare: () => SharePlus.instance.share(
+                        ShareParams(
+                          text:
+                              '${post.type.toUpperCase()} item: ${post.itemName}\n'
+                              '${post.description}\n'
+                              'Posted on CampusLF.',
+                          subject: 'CampusLF ${post.type} item',
                         ),
-                        onPrimaryAction: () => _showPost(post),
                       ),
-                    ),
-                ],
+                      onPrimaryAction: () => _showPost(post),
+                    );
+                },
               );
             },
           ),
@@ -7505,7 +7632,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
   final _postSearch = TextEditingController();
   String _feedbackCategory = 'suggestion';
   String _postStatus = '';
-  String _postSort = 'latest';
   int? _postCategoryId;
   Timer? _postSearchTimer;
   Map<String, dynamic>? _profile;
@@ -7603,7 +7729,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
         '/my-posts',
         queryParameters: {
           'page': page,
-          'sort': _postSort,
           if (_postStatus.isNotEmpty) 'status': _postStatus,
           if (_postCategoryId != null) 'category_id': _postCategoryId,
           if (_postSearch.text.trim().isNotEmpty)
@@ -7775,7 +7900,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
           icon: Icons.account_circle_outlined,
           title: 'Your profile',
           subtitle: 'Manage your details and keep track of your listings.',
-          tint: Color(0xFF5F84DB),
+          tint: CampusTheme.blue,
         ),
         const SizedBox(height: 16),
         Center(
@@ -7904,20 +8029,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
             _loadMyPosts();
           },
         ),
-        const SizedBox(height: 8),
-        DropdownButtonFormField<String>(
-          initialValue: _postSort,
-          decoration: const InputDecoration(labelText: 'Sort posts'),
-          items: const [
-            DropdownMenuItem(value: 'latest', child: Text('Most recent')),
-            DropdownMenuItem(value: 'oldest', child: Text('Oldest first')),
-          ],
-          onChanged: (value) {
-            if (value == null) return;
-            setState(() => _postSort = value);
-            _loadMyPosts();
-          },
-        ),
         SingleChildScrollView(
           scrollDirection: Axis.horizontal,
           child: Row(
@@ -7950,65 +8061,69 @@ class _ProfileScreenState extends State<ProfileScreen> {
             child: Center(child: Text('No posts match these filters.')),
           )
         else ...[
-          for (final post in [
-            for (final post in _myPosts)
-              _applyReaction(post, _reactionOverrides),
-          ])
-            _PostCard(
-              post: post,
-              onTapAuthor: () {},
-              onOwnerEdit: () => unawaited(_editPost(post)),
-              onOwnerDelete: () => unawaited(_deletePost(post)),
-              onRequestRetrieved: () => unawaited(_requestRetrieved(post)),
-              onReport: () => unawaited(_reportPost(context, widget.api, post)),
-              onTap: () => showModalBottomSheet<void>(
-                context: context,
-                isScrollControlled: true,
-                builder: (_) => _PostDetailSheet(
-                  api: widget.api,
+          _FlexiblePostGrid(
+            itemCount: _myPosts.length,
+            itemBuilder: (context, index) {
+              final post = _applyReaction(_myPosts[index], _reactionOverrides);
+              return _PostCard(
                   post: post,
-                  onReactionChanged: (reaction, count) {
-                    if (!mounted) return;
-                    setState(() {
-                      _reactionOverrides[post.id] = _ReactionState(
-                        count,
-                        reaction,
-                      );
-                    });
-                  },
-                ),
-              ),
-              onReact: () => unawaited(_toggleReaction(post)),
-              onShare: () => SharePlus.instance.share(
-                ShareParams(
-                  text:
-                      '${post.type.toUpperCase()} item: ${post.itemName}\n'
-                      '${post.description}\n'
-                      'Category: ${post.category} · ${post.location}\n'
-                      'Posted on CampusLF.',
-                  subject: 'CampusLF ${post.type} item',
-                ),
-              ),
-              onPrimaryAction: post.status == 'handover_pending'
-                  ? widget.onOpenHandovers
-                  : () => showModalBottomSheet<void>(
-                      context: context,
-                      isScrollControlled: true,
-                      builder: (_) => _PostDetailSheet(
-                        api: widget.api,
-                        post: post,
-                        onReactionChanged: (reaction, count) {
-                          if (!mounted) return;
-                          setState(() {
-                            _reactionOverrides[post.id] = _ReactionState(
-                              count,
-                              reaction,
-                            );
-                          });
-                        },
-                      ),
+                  compact: true,
+                  onTapAuthor: () {},
+                  onOwnerEdit: () => unawaited(_editPost(post)),
+                  onOwnerDelete: () => unawaited(_deletePost(post)),
+                  onRequestRetrieved: () => unawaited(_requestRetrieved(post)),
+                  onReport: () =>
+                      unawaited(_reportPost(context, widget.api, post)),
+                  onTap: () => showModalBottomSheet<void>(
+                    context: context,
+                    isScrollControlled: true,
+                    builder: (_) => _PostDetailSheet(
+                      api: widget.api,
+                      post: post,
+                      onReactionChanged: (reaction, count) {
+                        if (!mounted) return;
+                        setState(() {
+                          _reactionOverrides[post.id] = _ReactionState(
+                            count,
+                            reaction,
+                          );
+                        });
+                      },
                     ),
-            ),
+                  ),
+                  onReact: () => unawaited(_toggleReaction(post)),
+                  onShare: () => SharePlus.instance.share(
+                    ShareParams(
+                      text:
+                          '${post.type.toUpperCase()} item: ${post.itemName}\n'
+                          '${post.description}\n'
+                          'Category: ${post.category} · ${post.location}\n'
+                          'Posted on CampusLF.',
+                      subject: 'CampusLF ${post.type} item',
+                    ),
+                  ),
+                  onPrimaryAction: post.status == 'handover_pending'
+                      ? widget.onOpenHandovers
+                      : () => showModalBottomSheet<void>(
+                          context: context,
+                          isScrollControlled: true,
+                          builder: (_) => _PostDetailSheet(
+                            api: widget.api,
+                            post: post,
+                            onReactionChanged: (reaction, count) {
+                              if (!mounted) return;
+                              setState(() {
+                                _reactionOverrides[post.id] = _ReactionState(
+                                  count,
+                                  reaction,
+                                );
+                              });
+                            },
+                          ),
+                        ),
+                );
+            },
+          ),
           if (_postsError != null)
             Text(
               _postsError!,

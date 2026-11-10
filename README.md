@@ -23,7 +23,7 @@ The project includes `.vscode/settings.json` to add the XAMPP PHP directory to n
    CREATE DATABASE tmc_campuslf CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
    ```
 
-2. Configure `web/.env` to match the MySQL Server host, port, schema, username, and password. Member registrations and masterlist records require a Gmail address ending in `@gmail.com`. Set `TMC_DEFAULT_ADMIN_PASSWORD` to a unique password of at least 12 characters. Keep `.env` private.
+2. Configure `web/.env` to match the MySQL Server host, port, schema, username, and password. Member registrations and masterlist records require a Gmail address ending in `@gmail.com`. The default admin email is `campuslflostfound@gmail.com`; set `TMC_DEFAULT_ADMIN_PASSWORD` to a unique password of at least 12 characters. Keep `.env` private.
 3. From the `web/` folder, install PHP and web asset dependencies:
 
    ```powershell

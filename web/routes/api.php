@@ -15,7 +15,6 @@ use App\Http\Controllers\Api\PublicMediaController;
 use Illuminate\Support\Facades\Route;
 
 Route::prefix('v1')->group(function (): void {
-    Route::get('/captcha', [AuthController::class, 'captcha'])->middleware('throttle:10,1');
     Route::post('/register', [AuthController::class, 'register'])->middleware('throttle:5,1');
     Route::post('/verify-otp', [AuthController::class, 'verifyOtp'])->middleware('throttle:5,1');
     Route::post('/resend-otp', [AuthController::class, 'resendOtp'])->middleware('throttle:3,1');

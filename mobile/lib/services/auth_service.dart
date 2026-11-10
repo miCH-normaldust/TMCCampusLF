@@ -24,27 +24,10 @@ class AuthService {
     return response.data?['user']?['first_name'] as String? ?? 'TMC member';
   }
 
-  Future<Map<String, String>> captcha() async {
-    final response = await _api.dio.get<Map<String, dynamic>>('/captcha');
-    return {
-      'question': response.data?['question'] as String? ?? '',
-      'token': response.data?['token'] as String? ?? '',
-    };
-  }
-
-  Future<String> register({
-    required Map<String, dynamic> details,
-    required String captchaToken,
-    required String captchaAnswer,
-  }) async {
+  Future<String> register({required Map<String, dynamic> details}) async {
     final response = await _api.dio.post<Map<String, dynamic>>(
       '/register',
-      data: {
-        ...details,
-        'terms_accepted': true,
-        'captcha_token': captchaToken,
-        'captcha_answer': captchaAnswer,
-      },
+      data: {...details, 'terms_accepted': true},
     );
     return response.data?['message'] as String? ??
         'A verification code was sent to your TMC email.';

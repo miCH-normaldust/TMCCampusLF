@@ -1,23 +1,33 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:tmc_campuslf_mobile/core/theme.dart';
 
 void main() {
-  test('light and dark themes use the requested mode and colored headers', () {
-    final light = CampusTheme.build();
-    final dark = CampusTheme.build(dark: true);
+  test('uses the campus lost-and-found light palette and platform fonts', () {
+    final theme = CampusTheme.build();
 
-    expect(light.brightness, Brightness.light);
-    expect(light.appBarTheme.backgroundColor, CampusTheme.header);
-    expect(dark.brightness, Brightness.dark);
-    expect(dark.appBarTheme.backgroundColor, const Color(0xFF10134C));
-    expect(light.textTheme.bodyMedium?.fontFamily, 'Georgia');
-    expect(dark.textTheme.bodyMedium?.fontFamily, 'Georgia');
+    expect(theme.brightness, Brightness.light);
+    expect(theme.appBarTheme.backgroundColor, CampusTheme.header);
+    expect(theme.colorScheme.primary, CampusTheme.primary);
+    expect(
+      theme.textTheme.bodyMedium?.fontFamily,
+      defaultTargetPlatform == TargetPlatform.iOS ? '.SF Pro Text' : 'Roboto',
+    );
+    expect(
+      theme.textTheme.bodyMedium?.fontFamilyFallback,
+      containsAll(['.SF UI Text', 'SF Pro Text', 'Roboto']),
+    );
   });
 
-  test('lost and found surfaces use warm and cool palette colors', () {
-    expect(CampusTheme.lostSurface, const Color(0xFFF4E2F2));
-    expect(CampusTheme.foundSurface, const Color(0xFFD8F1F5));
-    expect(CampusTheme.otherSurface, const Color(0xFFE0E7FC));
+  test('lost and found surfaces use distinct campus colors', () {
+    expect(CampusTheme.sky, const Color(0xFFC9E9FF));
+    expect(CampusTheme.blue, const Color(0xFF9AC9E6));
+    expect(CampusTheme.sand, const Color(0xFFE9DFCF));
+    expect(CampusTheme.cream, const Color(0xFFFFF8EE));
+    expect(CampusTheme.slate, const Color(0xFF3E5663));
+    expect(CampusTheme.foundSurface, CampusTheme.sky);
+    expect(CampusTheme.lostSurface, CampusTheme.cream);
+    expect(CampusTheme.otherSurface, CampusTheme.sand);
   });
 }

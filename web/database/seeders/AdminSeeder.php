@@ -16,7 +16,7 @@ class AdminSeeder extends Seeder
         }
 
         User::updateOrCreate(
-            ['email' => strtolower((string) env('TMC_DEFAULT_ADMIN_EMAIL', 'admin@tmc.test'))],
+            ['email' => strtolower((string) env('TMC_DEFAULT_ADMIN_EMAIL', 'campuslflostfound@gmail.com'))],
             [
                 'first_name' => 'CampusLF',
                 'last_name' => 'Administrator',

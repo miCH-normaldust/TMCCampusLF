@@ -2,28 +2,29 @@
 
 namespace Tests\Feature;
 
-use App\Models\User;
 use App\Models\Category;
 use App\Models\ClaimRequest;
-use App\Models\LostSighting;
+use App\Models\Handover;
 use App\Models\Location;
+use App\Models\LostSighting;
 use App\Models\MeetupLocation;
 use App\Models\Post;
 use App\Models\Report;
+use App\Models\User;
+use Illuminate\Contracts\Debug\ExceptionHandler;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Foundation\Vite;
 use Illuminate\Http\Request;
+use Illuminate\Http\UploadedFile;
 use Illuminate\Session\TokenMismatchException;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Contracts\Debug\ExceptionHandler;
-use Illuminate\Http\UploadedFile;
 use Tests\TestCase;
 
 class AdminPortalPagesTest extends TestCase
 {
     use RefreshDatabase;
 
-    public function test_admin_login_uses_the_campus_pastel_palette(): void
+    public function test_admin_login_uses_the_campus_palette_without_theme_toggle_or_captcha(): void
     {
         $this->app->make(Vite::class)->useHotFile(storage_path('framework/testing/missing-vite-hot-file'));
 
@@ -32,7 +33,9 @@ class AdminPortalPagesTest extends TestCase
             ->assertSee('class="admin-login"', false)
             ->assertSee('class="login-card"', false)
             ->assertSee('var(--campus-primary)', false)
-            ->assertSee('campuslf-admin-theme')
+            ->assertSee('Forgot password?')
+            ->assertDontSee('campuslf-admin-theme')
+            ->assertDontSee('captcha_answer')
             ->assertDontSee('#7a0f18')
             ->assertDontSee('#a31621');
     }
@@ -92,19 +95,21 @@ class AdminPortalPagesTest extends TestCase
 
         $this->get(route('admin.dashboard'))
             ->assertOk()
-            ->assertSee('Admin Home')
+            ->assertSee('Dashboard')
             ->assertSee('Community Feed')
             ->assertSee('Open Community Feed')
             ->assertDontSee('Browse all listings')
             ->assertDontSee('Item name or description')
-            ->assertSee('Transactions')
+            ->assertDontSee('Transactions')
             ->assertSee('Monitoring and Maintenance')
+            ->assertSee('Users')
             ->assertSee('Feedback')
             ->assertSee('/build/assets/app-')
             ->assertDontSee('127.0.0.1:5173');
 
         foreach ([
             'admin.community-feed.index',
+            'admin.activity.index',
             'admin.handovers.history',
             'admin.claims.index',
             'admin.handovers.index',
@@ -113,6 +118,9 @@ class AdminPortalPagesTest extends TestCase
             'admin.settings.index',
         ] as $route) {
             $this->get(route($route))->assertOk();
+        }
+        foreach (['claims', 'proofs', 'handovers', 'users'] as $category) {
+            $this->get(route('admin.activity.index', ['category' => $category]))->assertOk();
         }
         $this->get(route('admin.claims.index'))
             ->assertOk()
@@ -133,6 +141,249 @@ class AdminPortalPagesTest extends TestCase
             ->assertSee('People are listed alphabetically by last name.')
             ->assertSee('Name or email')
             ->assertDontSee('Browse community posts');
+    }
+
+    public function test_users_page_shows_directory_first_and_opens_forms_from_header_buttons(): void
+    {
+        $response = $this->actingAs($this->createMasterlistAdmin(), 'admin')
+            ->get(route('admin.users.index'))
+            ->assertOk()
+            ->assertSee('User list')
+            ->assertSee('Add a user')
+            ->assertSee('Masterlist')
+            ->assertSee('Register a user')
+            ->assertDontSee('<dialog id="add-user-dialog" data-auto-open', false)
+            ->assertDontSee('<dialog id="masterlist-dialog" data-auto-open', false);
+
+        $content = $response->getContent();
+        $directoryPosition = strpos($content, '<section class="users-directory');
+        $registrationDialogPosition = strpos($content, '<dialog id="add-user-dialog"');
+
+        $this->assertIsInt($directoryPosition);
+        $this->assertIsInt($registrationDialogPosition);
+        $this->assertLessThan($registrationDialogPosition, $directoryPosition);
+    }
+
+    public function test_admin_filter_controls_apply_without_filter_buttons(): void
+    {
+        $this->actingAs($this->createMasterlistAdmin(), 'admin');
+
+        foreach ([
+            'admin.users.index',
+            'admin.claims.index',
+            'admin.sightings.index',
+            'admin.handovers.index',
+            'admin.handovers.history',
+            'admin.feedback.index',
+            'admin.reports.index',
+            'admin.activity.index',
+            'admin.community-feed.index',
+        ] as $route) {
+            $content = $this->get(route($route))
+                ->assertOk()
+                ->assertSee('data-auto-filter', false)
+                ->getContent();
+
+            $this->assertDoesNotMatchRegularExpression(
+                '/<button\b(?=[^>]*\btype="submit")[^>]*>\s*(?:Filter|Show reports)\s*<\/button>/i',
+                $content,
+                "The {$route} page should apply filters without a submit button.",
+            );
+        }
+    }
+
+    public function test_activity_exports_claims_proofs_and_handovers_as_filtered_csv_files(): void
+    {
+        $admin = $this->createMasterlistAdmin();
+        $member = User::create([
+            'first_name' => 'CSV',
+            'last_name' => 'Member',
+            'tmc_id_no' => 'TMC-ACTIVITY-CSV',
+            'email' => 'activity-csv-member@tmc.test',
+            'password' => 'LongTestPassword!123',
+            'role' => 'user',
+            'status' => 'active',
+            'email_verified_at' => now(),
+        ]);
+        $category = Category::create(['name' => 'Activity CSV Category', 'is_active' => true]);
+        $location = Location::create(['name' => 'Activity CSV Location', 'is_active' => true]);
+        $foundPost = $this->createFeedPost($admin, $category, $location, 'found', 'active', 'CSV Found Notebook');
+        $lostPost = $this->createFeedPost($admin, $category, $location, 'lost', 'active', 'CSV Lost Umbrella');
+        $claim = ClaimRequest::create([
+            'post_id' => $foundPost->id,
+            'claimant_id' => $member->id,
+            'answers' => ['blue cover'],
+            'attempt_no' => 2,
+            'status' => 'approved',
+            'author_decision' => 'approved',
+            'author_decision_reason' => 'The item details match.',
+            'reviewed_at' => now(),
+            'review_reason' => 'Reviewed by TMC.',
+        ]);
+        LostSighting::create([
+            'post_id' => $lostPost->id,
+            'user_id' => $member->id,
+            'answer' => 'yes',
+            'evidence_text' => 'Seen beside the library.',
+            'author_decision' => 'approved',
+            'author_decision_reason' => 'The owner confirmed it.',
+            'admin_decision' => 'approved',
+            'admin_reason' => 'Evidence verified.',
+        ]);
+        Handover::create([
+            'claim_id' => $claim->id,
+            'code_hash' => hash('sha256', 'activity-export-code'),
+            'code_encrypted' => 'encrypted-code',
+            'code_lookup' => hash('sha256', 'activity-export-code-lookup'),
+            'expires_at' => now()->addDay(),
+            'owner_confirmed_at' => now(),
+            'finder_confirmed_at' => now(),
+            'status' => 'scheduled',
+            'scheduled_at' => now()->addDay(),
+            'reschedule_reason' => 'The first time was unavailable.',
+        ]);
+
+        $expectedExports = [
+            'claims' => ['tmc-campuslf-claims.csv', 'item,post_type,claimant_name', 'CSV Found Notebook', 'The item details match.'],
+            'proofs' => ['tmc-campuslf-proofs.csv', 'item,post_type,submitter_name', 'CSV Lost Umbrella', 'Seen beside the library.'],
+            'handovers' => ['tmc-campuslf-handovers.csv', 'item,post_type,status,owner_name', 'CSV Found Notebook', 'The first time was unavailable.'],
+        ];
+
+        $this->actingAs($admin, 'admin');
+        foreach ($expectedExports as $category => [$filename, $header, $item, $detail]) {
+            $response = $this->get(route('admin.activity.export', [
+                'category' => $category,
+                'from' => today()->toDateString(),
+                'to' => today()->toDateString(),
+            ]))->assertDownload($filename);
+            $csv = $response->streamedContent();
+
+            $this->assertStringContainsString($header, $csv);
+            $this->assertStringContainsString($item, $csv);
+            $this->assertStringContainsString($detail, $csv);
+            $this->assertDatabaseHas('audit_logs', [
+                'action' => 'activity_exported',
+                'target_type' => $category,
+            ]);
+        }
+    }
+
+    public function test_community_post_detail_integrates_proof_and_handover_management(): void
+    {
+        $this->app->make(Vite::class)->useHotFile(storage_path('framework/testing/missing-vite-hot-file'));
+        $admin = User::create([
+            'first_name' => 'Detail',
+            'last_name' => 'Admin',
+            'tmc_id_no' => 'ADMIN-POST-DETAIL',
+            'email' => 'admin-post-detail@tmc.test',
+            'password' => 'LongTestPassword!123',
+            'role' => 'admin',
+            'status' => 'active',
+            'email_verified_at' => now(),
+        ]);
+        $owner = User::create([
+            'first_name' => 'Post',
+            'last_name' => 'Owner',
+            'tmc_id_no' => 'TMC-POST-OWNER',
+            'email' => 'post-owner@tmc.test',
+            'password' => 'LongTestPassword!123',
+            'role' => 'user',
+            'status' => 'active',
+            'email_verified_at' => now(),
+        ]);
+        $category = Category::create(['name' => 'Accessory', 'is_active' => true]);
+        $location = Location::create(['name' => 'Library', 'is_active' => true]);
+        $post = Post::create([
+            'user_id' => $owner->id,
+            'type' => 'lost',
+            'item_name' => 'Lost blue bottle',
+            'description' => 'A blue bottle near the library.',
+            'category_id' => $category->id,
+            'color' => 'Blue',
+            'location_id' => $location->id,
+            'event_date' => today(),
+            'custody' => 'unknown',
+            'status' => 'active',
+        ]);
+
+        $this->actingAs($admin, 'admin')
+            ->get(route('admin.community-feed.show', $post))
+            ->assertOk()
+            ->assertSee('Lost item proofs')
+            ->assertSee('Handovers')
+            ->assertSee('No proofs for this post');
+    }
+
+    public function test_admin_community_feed_shows_profile_photos_and_post_moderation_actions(): void
+    {
+        $admin = User::create([
+            'first_name' => 'Feed',
+            'last_name' => 'Moderator',
+            'tmc_id_no' => 'ADMIN-FEED-MODERATION',
+            'email' => 'admin-feed-moderation@tmc.test',
+            'password' => 'LongTestPassword!123',
+            'role' => 'admin',
+            'status' => 'active',
+            'email_verified_at' => now(),
+        ]);
+        $author = User::create([
+            'first_name' => 'Photo',
+            'last_name' => 'Owner',
+            'tmc_id_no' => 'TMC-FEED-PROFILE-PHOTO',
+            'email' => 'photo-owner@tmc.test',
+            'password' => 'LongTestPassword!123',
+            'role' => 'user',
+            'status' => 'active',
+            'profile_picture_path' => 'profiles/feed-avatar.jpg',
+            'email_verified_at' => now(),
+        ]);
+        $category = Category::create(['name' => 'Moderation Category', 'is_active' => true]);
+        $location = Location::create(['name' => 'Moderation Location', 'is_active' => true]);
+        $post = $this->createFeedPost($author, $category, $location, 'lost', 'active', 'Moderation test item');
+
+        $this->actingAs($admin, 'admin')
+            ->get(route('admin.community-feed.index'))
+            ->assertOk()
+            ->assertSee('/api/v1/media?path=profiles%2Ffeed-avatar.jpg', false)
+            ->assertSee('Report post')
+            ->assertSee('Warn author')
+            ->assertSee('Delete post');
+
+        $this->post(route('admin.community-feed.moderate', $post), [
+            'action' => 'report',
+            'reason' => 'Needs moderator review.',
+        ])->assertRedirect();
+        $this->assertDatabaseHas('reports', [
+            'post_id' => $post->id,
+            'reporter_id' => $admin->id,
+            'reason' => 'Needs moderator review.',
+            'status' => 'pending',
+        ]);
+
+        $this->post(route('admin.community-feed.moderate', $post), [
+            'action' => 'warn',
+            'reason' => 'Please update this listing.',
+        ])->assertRedirect();
+        $this->assertDatabaseHas('audit_logs', [
+            'admin_id' => $admin->id,
+            'action' => 'post_warn',
+            'target_id' => $post->id,
+        ]);
+        $this->assertDatabaseHas('notifications', [
+            'notifiable_id' => $author->id,
+            'type' => 'moderation_action',
+        ]);
+
+        $this->post(route('admin.community-feed.moderate', $post), [
+            'action' => 'delete',
+            'reason' => 'This listing violates campus policy.',
+        ])->assertRedirect();
+        $this->assertDatabaseMissing('posts', ['id' => $post->id]);
+        $this->assertDatabaseHas('audit_logs', [
+            'admin_id' => $admin->id,
+            'action' => 'post_delete',
+            'target_id' => $post->id,
+        ]);
     }
 
     public function test_lost_item_proof_images_open_in_a_pop_up_viewer(): void
@@ -346,12 +597,14 @@ class AdminPortalPagesTest extends TestCase
         $this->actingAs($admin, 'admin')
             ->get(route('admin.dashboard'))
             ->assertOk()
-            ->assertSee('<small>Found item posts</small><strong>1</strong>', false)
+            ->assertSee('<small>Found items</small><strong>1</strong>', false)
             ->assertSee(route('admin.community-feed.index', ['type' => 'found']), false)
-            ->assertSee('<small>Lost item posts</small><strong>1</strong>', false)
+            ->assertSee('<small>Users</small><strong>1</strong>', false)
+            ->assertSee(route('admin.users.index'), false)
+            ->assertSee('<small>Lost posts</small><strong>1</strong>', false)
             ->assertSee(route('admin.community-feed.index', ['type' => 'lost']), false)
-            ->assertSee('<small>Found item claims</small><strong>1</strong>', false)
-            ->assertSee('<small>Lost item proofs</small><strong>3</strong>', false);
+            ->assertSee('CampusLF Activity: Last 30 Days')
+            ->assertSee('User Engagement');
     }
 
     public function test_deleted_report_actions_remain_available_in_report_history(): void
@@ -547,7 +800,7 @@ class AdminPortalPagesTest extends TestCase
                 'sort' => 'oldest',
             ]))
             ->assertOk()
-            ->assertSee('Apply filters')
+            ->assertDontSee('Apply filters')
             ->assertSee('Lost Wallet')
             ->assertDontSee('Found Wallet')
             ->assertDontSee('Hidden Wallet')

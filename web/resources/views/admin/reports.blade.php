@@ -12,7 +12,7 @@
     </div>
 
     <section class="card section">
-        <form class="filter-form compact-filter" method="get" action="{{ route('admin.reports.index') }}">
+        <form class="filter-form compact-filter" method="get" action="{{ route('admin.reports.index') }}" data-auto-filter>
             <label>Report history
                 <select name="status">
                     <option value="pending" @selected($status === 'pending')>Pending review</option>
@@ -21,7 +21,6 @@
                     <option value="all" @selected($status === 'all')>All reports</option>
                 </select>
             </label>
-            <button class="button" type="submit">Show reports</button>
         </form>
     </section>
 

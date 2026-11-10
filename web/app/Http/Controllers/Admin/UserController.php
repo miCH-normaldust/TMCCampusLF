@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
 use App\Models\User;
+use App\Models\UserModerationRestriction;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -32,6 +33,48 @@ class UserController extends Controller
             ->withQueryString();
 
         return view('admin.users', ['users' => $users]);
+    }
+
+    public function show(User $user): View
+    {
+        abort_unless($user->role === 'user', 404);
+        $user->loadCount(['posts', 'comments']);
+        $posts = $user->posts()->latest()->limit(12)->get();
+        $activity = $user->activityLogs()->latest()->limit(10)->get();
+        $moderationActions = DB::table('audit_logs')
+            ->leftJoin('users as admins', 'admins.id', '=', 'audit_logs.admin_id')
+            ->where('audit_logs.target_type', User::class)
+            ->where('audit_logs.target_id', $user->id)
+            ->whereIn('audit_logs.action', [
+                'user_warned',
+                'user_banned',
+                'user_suspended',
+                'user_restored',
+                'user_restriction_lifted',
+            ])
+            ->orderByDesc('audit_logs.created_at')
+            ->limit(20)
+            ->get([
+                'audit_logs.action',
+                'audit_logs.reason',
+                'audit_logs.created_at',
+                'admins.first_name as admin_first_name',
+                'admins.last_name as admin_last_name',
+            ]);
+        $restrictions = UserModerationRestriction::query()
+            ->where('user_id', $user->id)
+            ->with('targetUser:id,first_name,last_name,email')
+            ->latest()
+            ->get();
+        $recipients = User::query()
+            ->where('role', 'user')
+            ->where('status', 'active')
+            ->where('id', '!=', $user->id)
+            ->orderBy('first_name')
+            ->orderBy('last_name')
+            ->get(['id', 'first_name', 'last_name', 'email']);
+
+        return view('admin.user-profile', compact('user', 'posts', 'activity', 'moderationActions', 'restrictions', 'recipients'));
     }
 
     public function store(Request $request): RedirectResponse
@@ -127,6 +170,141 @@ class UserController extends Controller
         $this->audit($request, $user, 'user_'.$data['status'], $data['reason'] ?? null);
 
         return back()->with('status', 'User account status updated.');
+    }
+
+    public function moderate(Request $request, User $user): RedirectResponse
+    {
+        abort_unless($user->role === 'user', 404);
+        $data = $request->validate([
+            'action' => ['required', Rule::in(['warn', 'ban', 'suspend', 'restore'])],
+            'reason' => ['required', 'string', 'max:1000'],
+            'scopes' => ['required_if:action,ban', 'array', 'min:1'],
+            'scopes.*' => ['required', 'distinct', Rule::in([
+                'posting_lost',
+                'posting_found',
+                'comments',
+                'reactions',
+                'messaging',
+                'other',
+            ])],
+            'messaging_target' => [
+                Rule::requiredIf(fn (): bool => $request->input('action') === 'ban'
+                    && in_array('messaging', (array) $request->input('scopes', []), true)),
+                'nullable',
+                Rule::in(['all', 'specific']),
+            ],
+            'messaging_user_id' => [
+                Rule::requiredIf(fn (): bool => $request->input('action') === 'ban'
+                    && in_array('messaging', (array) $request->input('scopes', []), true)
+                    && $request->input('messaging_target') === 'specific'),
+                'nullable',
+                'integer',
+                'exists:users,id',
+            ],
+            'other_details' => [
+                Rule::requiredIf(fn (): bool => $request->input('action') === 'ban'
+                    && in_array('other', (array) $request->input('scopes', []), true)),
+                'nullable',
+                'string',
+                'max:1000',
+            ],
+        ]);
+
+        if ($data['action'] === 'ban') {
+            $scopes = array_values(array_unique($data['scopes']));
+            $messagingUserId = null;
+            if (in_array('messaging', $scopes, true) && $data['messaging_target'] === 'specific') {
+                $recipient = User::query()
+                    ->where('role', 'user')
+                    ->find($data['messaging_user_id']);
+                if (! $recipient || $recipient->id === $user->id) {
+                    throw ValidationException::withMessages([
+                        'messaging_user_id' => 'Choose a different active user account.',
+                    ]);
+                }
+                $messagingUserId = $recipient->id;
+            }
+
+            DB::transaction(function () use ($request, $user, $data, $scopes, $messagingUserId): void {
+                foreach ($scopes as $scope) {
+                    $targetId = $scope === 'messaging' ? $messagingUserId : null;
+                    $existing = UserModerationRestriction::query()
+                        ->where('user_id', $user->id)
+                        ->where('scope', $scope)
+                        ->where('target_user_id', $targetId)
+                        ->whereNull('lifted_at')
+                        ->exists();
+                    if ($existing) {
+                        continue;
+                    }
+
+                    UserModerationRestriction::create([
+                        'user_id' => $user->id,
+                        'created_by' => $request->user('admin')->id,
+                        'target_user_id' => $targetId,
+                        'scope' => $scope,
+                        'details' => $scope === 'other' ? $data['other_details'] : null,
+                        'reason' => $data['reason'],
+                    ]);
+                }
+                $this->notifyModeratedUser($user, 'Account restrictions applied', $data['reason']);
+                $this->audit($request, $user, 'user_banned', $data['reason']);
+            });
+        } elseif ($data['action'] === 'suspend') {
+            DB::transaction(function () use ($request, $user, $data): void {
+                $user->update(['status' => 'suspended']);
+                $this->notifyModeratedUser($user, 'Account suspended', $data['reason']);
+                $this->audit($request, $user, 'user_suspended', $data['reason']);
+            });
+        } elseif ($data['action'] === 'warn') {
+            DB::transaction(function () use ($request, $user, $data): void {
+                $this->notifyModeratedUser($user, 'Account warning', $data['reason']);
+                $this->audit($request, $user, 'user_warned', $data['reason']);
+            });
+        } else {
+            if ($user->status === 'active') {
+                throw ValidationException::withMessages([
+                    'action' => 'This account is already active.',
+                ]);
+            }
+            DB::transaction(function () use ($request, $user, $data): void {
+                $user->update(['status' => 'active']);
+                $this->notifyModeratedUser($user, 'Account restored', $data['reason']);
+                $this->audit($request, $user, 'user_restored', $data['reason']);
+            });
+        }
+
+        return redirect()->route('admin.users.show', $user)->with('status', 'Moderation action recorded.');
+    }
+
+    public function liftRestriction(Request $request, User $user, UserModerationRestriction $restriction): RedirectResponse
+    {
+        abort_unless($user->role === 'user' && $restriction->user_id === $user->id, 404);
+        abort_if($restriction->lifted_at !== null, 409, 'This restriction has already been lifted.');
+        $data = $request->validate([
+            'reason' => ['required', 'string', 'max:1000'],
+        ]);
+
+        DB::transaction(function () use ($request, $user, $restriction, $data): void {
+            $restriction->update([
+                'lifted_at' => now(),
+                'lifted_by' => $request->user('admin')->id,
+                'lift_reason' => $data['reason'],
+            ]);
+            $this->notifyModeratedUser($user, 'Account restriction lifted', $data['reason']);
+            $this->audit($request, $user, 'user_restriction_lifted', $data['reason']);
+        });
+
+        return redirect()->route('admin.users.show', $user)->with('status', 'Account restriction lifted.');
+    }
+
+    private function notifyModeratedUser(User $user, string $title, string $reason): void
+    {
+        $user->notifications()->create([
+            'id' => (string) Str::uuid(),
+            'type' => 'account_moderation',
+            'data' => ['title' => $title, 'body' => $reason],
+        ]);
     }
 
     public function import(Request $request): View|RedirectResponse
