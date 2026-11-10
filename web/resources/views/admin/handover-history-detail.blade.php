@@ -28,8 +28,8 @@
             <h3>{{ $post?->item_name ?? 'Listing no longer available' }}</h3>
             @if ($post?->description)<p class="origin-post-description">{{ $post->description }}</p>@endif
             <div class="origin-post-meta">
-                <span><small>Category</small>{{ $post?->category?->name ?? '—' }}</span>
-                <span><small>Listed area</small>{{ $post?->location?->name ?? '—' }}</span>
+                <span><small>Category</small>{{ $post?->custom_category ?: ($post?->category?->name ?? '—') }}</span>
+                <span><small>Listed area</small>{{ $post?->custom_location ?: ($post?->location?->name ?? '—') }}</span>
                 <span><small>Event date</small>{{ $post?->event_date?->format('M j, Y') ?? '—' }}</span>
                 <span><small>Post status</small>{{ str_replace('_', ' ', ucfirst($post?->status ?? 'unavailable')) }}</span>
             </div>

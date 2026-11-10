@@ -9,7 +9,7 @@
             <p class="eyebrow">{{ strtoupper($post->type) }} POST #{{ $post->id }}</p>
             <h1>{{ $post->item_name }}</h1>
             <p>{{ $post->description }}</p>
-            <p class="muted">Posted by {{ $post->author?->first_name }} {{ $post->author?->last_name }} · {{ $post->created_at->format('M j, Y g:i A') }} · {{ $post->location?->name ?? 'Campus' }}</p>
+            <p class="muted">Posted by {{ $post->author?->first_name }} {{ $post->author?->last_name }} · {{ $post->created_at->format('M j, Y g:i A') }} · {{ $post->custom_location ?: ($post->location?->name ?? 'Campus') }}</p>
         </div>
         <span class="feed-status-pill status-{{ $post->status }}">{{ str_replace('_', ' ', ucfirst($post->status)) }}</span>
     </section>

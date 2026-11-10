@@ -29,12 +29,12 @@ class CustomPostCatalogValuesTest extends TestCase
             'location_other' => 'North garden bench',
             'event_date' => today()->toDateString(),
         ])->assertCreated()
-            ->assertJsonPath('category', 'Handmade stationery')
-            ->assertJsonPath('category_other', 'Handmade stationery')
-            ->assertJsonPath('location', 'North garden bench')
-            ->assertJsonPath('location_other', 'North garden bench');
+            ->assertJsonPath('data.category', 'Handmade stationery')
+            ->assertJsonPath('data.category_other', 'Handmade stationery')
+            ->assertJsonPath('data.location', 'North garden bench')
+            ->assertJsonPath('data.location_other', 'North garden bench');
 
-        $postId = $response->json('id');
+        $postId = $response->json('data.id');
         $otherCategory = Category::where('name', 'Other')->firstOrFail();
         $otherLocation = Location::where('name', 'Other')->firstOrFail();
         $this->assertDatabaseHas('posts', [
@@ -59,10 +59,10 @@ class CustomPostCatalogValuesTest extends TestCase
             'location_id' => $regularLocation->id,
             'event_date' => today()->toDateString(),
         ])->assertOk()
-            ->assertJsonPath('category', 'Electronics')
-            ->assertJsonPath('category_other', null)
-            ->assertJsonPath('location', 'Library')
-            ->assertJsonPath('location_other', null);
+            ->assertJsonPath('data.category', 'Electronics')
+            ->assertJsonPath('data.category_other', null)
+            ->assertJsonPath('data.location', 'Library')
+            ->assertJsonPath('data.location_other', null);
 
         $this->assertDatabaseHas('posts', [
             'id' => $postId,

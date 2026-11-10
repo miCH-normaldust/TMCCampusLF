@@ -8,6 +8,7 @@ use App\Models\Conversation;
 use App\Models\Handover;
 use App\Models\Post;
 use App\Services\ImageReencoder;
+use App\Support\PublicMediaUrl;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -216,7 +217,7 @@ class ClaimController extends Controller
             'id' => $claim->id,
             'answers' => $claim->answers,
             'evidence_images' => $claim->evidenceImages
-                ->map(fn ($image): string => \App\Support\PublicMediaUrl::forPath($image->path))
+                ->map(fn ($image): string => PublicMediaUrl::forPath($image->path))
                 ->all(),
             'status' => $claim->status,
             'author_decision' => $claim->author_decision,
@@ -249,7 +250,7 @@ class ClaimController extends Controller
     private function postAuthorClaims(Request $request, bool $awaitingDecision): JsonResponse
     {
         $claims = ClaimRequest::with([
-            'post:id,item_name,type,category_id',
+            'post:id,item_name,type,category_id,custom_category',
             'post.category:id,name',
             'post.verificationQuestions:id,post_id,question,answer',
             'claimant:id,first_name,last_name',
@@ -263,7 +264,7 @@ class ClaimController extends Controller
                 'id' => $claim->id,
                 'post_id' => $claim->post_id,
                 'item_name' => $claim->post->item_name,
-                'category' => $claim->post->category?->name ?? 'Other',
+                'category' => $claim->post->custom_category ?: ($claim->post->category?->name ?? 'Other'),
                 'claimant_first_name' => $claim->claimant->first_name,
                 'claimant_last_name' => $claim->claimant->last_name,
                 'attempt_no' => $claim->attempt_no,
@@ -297,7 +298,7 @@ class ClaimController extends Controller
                     ])
                     ->all(),
                 'evidence_images' => $claim->evidenceImages
-                    ->map(fn ($image): string => \App\Support\PublicMediaUrl::forPath($image->path))
+                    ->map(fn ($image): string => PublicMediaUrl::forPath($image->path))
                     ->all(),
             ]);
 
@@ -326,7 +327,7 @@ class ClaimController extends Controller
                 'review_reason' => $claim->review_reason,
                 'answers' => $claim->answers,
                 'evidence_images' => $claim->evidenceImages
-                    ->map(fn ($image): string => \App\Support\PublicMediaUrl::forPath($image->path))
+                    ->map(fn ($image): string => PublicMediaUrl::forPath($image->path))
                     ->all(),
                 'handover_status' => $claim->handover?->status,
                 'created_at' => $claim->created_at,

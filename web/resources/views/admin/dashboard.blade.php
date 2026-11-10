@@ -6,6 +6,8 @@
     @php
         $activityValues = $dailyActivity->values()->all();
         $activityMax = max(1, max(array_map(fn ($day) => $day['lost'] + $day['found'], $activityValues)));
+        $activityColors = ['lost' => '#9AC9E6', 'found' => '#3E5663'];
+        $engagementColors = ['reports' => '#D2A84F', 'proofs' => '#C9E9FF', 'claims' => '#3E5663'];
         $chartPoints = static function (string $type) use ($activityValues, $activityMax): string {
             $lastIndex = max(1, count($activityValues) - 1);
             return collect($activityValues)->map(function ($day, $index) use ($type, $activityMax, $lastIndex): string {
@@ -28,14 +30,19 @@
             $notificationGroups[$group]++;
         }
         $notificationTotal = array_sum($notificationGroups);
-        $notificationColors = ['#9AC9E6', '#3E5663', '#E9DFCF', '#C9E9FF'];
+        $notificationColors = [
+            'Evidence' => '#9AC9E6',
+            'Claims' => '#3E5663',
+            'Handovers' => '#D2A84F',
+            'Other' => '#C9E9FF',
+        ];
         $notificationGradient = 'conic-gradient(#E9DFCF 0 100%)';
         if ($notificationTotal > 0) {
             $position = 0;
             $stops = [];
-            foreach (array_values($notificationGroups) as $index => $count) {
+            foreach ($notificationGroups as $group => $count) {
                 $nextPosition = $position + ($count / $notificationTotal * 100);
-                $stops[] = "{$notificationColors[$index]} {$position}% {$nextPosition}%";
+                $stops[] = "{$notificationColors[$group]} {$position}% {$nextPosition}%";
                 $position = $nextPosition;
             }
             $notificationGradient = 'conic-gradient('.implode(', ', $stops).')';
@@ -94,8 +101,8 @@
                 <span class="dashboard-chart-period">30 days</span>
             </header>
             <div class="dashboard-chart-legend">
-                <span><i class="legend-lost"></i>Lost posts</span>
-                <span><i class="legend-found"></i>Found posts</span>
+                <span><i style="background:{{ $activityColors['lost'] }}"></i>Lost posts</span>
+                <span><i style="background:{{ $activityColors['found'] }}"></i>Found posts</span>
             </div>
             <div class="activity-chart">
                 <div class="activity-y-labels" aria-hidden="true">
@@ -106,8 +113,8 @@
                     @foreach ([35, 82.5, 130, 177.5, 225] as $y)
                         <line x1="0" y1="{{ $y }}" x2="1000" y2="{{ $y }}" class="chart-grid-line"/>
                     @endforeach
-                    <polyline points="{{ $chartPoints('lost') }}" class="chart-line chart-line-lost"/>
-                    <polyline points="{{ $chartPoints('found') }}" class="chart-line chart-line-found"/>
+                    <polyline points="{{ $chartPoints('lost') }}" class="chart-line" style="stroke:{{ $activityColors['lost'] }}"/>
+                    <polyline points="{{ $chartPoints('found') }}" class="chart-line" style="stroke:{{ $activityColors['found'] }}"/>
                 </svg>
             </div>
             <div class="activity-x-labels">
@@ -128,9 +135,9 @@
                 <span class="dashboard-chart-period">30 days</span>
             </header>
             <div class="dashboard-chart-legend">
-                <span><i class="legend-reports"></i>Reports</span>
-                <span><i class="legend-proofs"></i>Proofs</span>
-                <span><i class="legend-claims"></i>Claims</span>
+                <span><i style="background:{{ $engagementColors['reports'] }}"></i>Reports</span>
+                <span><i style="background:{{ $engagementColors['proofs'] }}"></i>Proofs</span>
+                <span><i style="background:{{ $engagementColors['claims'] }}"></i>Claims</span>
             </div>
             <div class="engagement-chart" role="img" aria-label="Reports, proofs and claims submitted by user type over the last 30 days">
                 @foreach (['student' => 'Students', 'staff' => 'Staff', 'instructor' => 'Instructors'] as $type => $label)
@@ -138,7 +145,7 @@
                         <div class="engagement-bars">
                             @foreach (['reports' => 'Reports', 'proofs' => 'Proofs', 'claims' => 'Claims'] as $series => $seriesLabel)
                                 @php($height = $engagement[$series][$type] > 0 ? max(4, $engagement[$series][$type] / $engagementMax * 100) : 2)
-                                <span class="engagement-bar bar-{{ $series }}" style="height:{{ $height }}%" title="{{ $seriesLabel }}: {{ $engagement[$series][$type] }}"></span>
+                                <span class="engagement-bar" style="height:{{ $height }}%;background:{{ $engagementColors[$series] }}" title="{{ $seriesLabel }}: {{ $engagement[$series][$type] }}"></span>
                             @endforeach
                         </div>
                         <small>{{ $label }}</small>
@@ -213,7 +220,7 @@
                 </div>
                 <ul class="notification-type-legend">
                     @foreach ($notificationGroups as $group => $count)
-                        <li><i class="notification-type-{{ strtolower($group) }}"></i><span>{{ $group }}</span><strong>{{ $count }}</strong></li>
+                        <li><i style="background:{{ $notificationColors[$group] }}"></i><span>{{ $group }}</span><strong>{{ $count }}</strong></li>
                     @endforeach
                 </ul>
             </div>

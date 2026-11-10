@@ -147,12 +147,12 @@
                             <div class="community-post-tags">
                                 <span class="status-tag {{ $post->type }}">{{ ucfirst($post->type) }}</span>
                                 <span class="feed-status-pill status-{{ $post->status }}">{{ str_replace('_', ' ', ucfirst($post->status)) }}</span>
-                                <span class="community-category">{{ $post->category?->name ?? 'Uncategorized' }}</span>
+                                <span class="community-category">{{ $post->custom_category ?: ($post->category?->name ?? 'Uncategorized') }}</span>
                             </div>
                             <h3>{{ $post->item_name }}</h3>
                             <p class="community-post-description">{{ $post->description }}</p>
                             <div class="community-post-meta">
-                                <span>⌖ {{ $post->location?->name ?? 'Campus' }}</span>
+                                <span>⌖ {{ $post->custom_location ?: ($post->location?->name ?? 'Campus') }}</span>
                                 <span>Event {{ $post->event_date?->format('M j, Y') ?? '—' }}</span>
                             </div>
                             <nav class="community-post-actions" aria-label="Post management">
